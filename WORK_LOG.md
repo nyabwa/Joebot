@@ -395,21 +395,103 @@ The command now:
 6. Tries both high-resolution and preview profile pictures.
 7. Sends the image directly as a buffer.
 
-## 11. Remaining Operational Notes
+## 11. GitHub SSH Setup and Successful Push
+
+### Problem
+
+GitHub pushes over HTTPS were blocked because the terminal session could not prompt for username/password or accept a Personal Access Token interactively.
+
+Earlier push attempts failed with:
+
+```text
+fatal: could not read Username for 'https://github.com': No such device or address
+```
+
+### Cause
+
+The local Git remote was using HTTPS:
+
+```text
+https://github.com/nyabwa/Joebot.git
+```
+
+This environment had no Git credential prompt, no stored GitHub credentials, and no GitHub SSH key configured.
+
+### Fix
+
+Generated a dedicated SSH key for GitHub:
+
+```text
+~/.ssh/id_ed25519_github
+```
+
+Created SSH config so `github.com` uses that key:
+
+```text
+Host github.com
+    HostName github.com
+    User git
+    IdentityFile ~/.ssh/id_ed25519_github
+    IdentitiesOnly yes
+```
+
+Added the public key to GitHub as:
+
+```text
+Title: JoeBot local machine
+Key type: Authentication Key
+```
+
+Verified SSH authentication:
+
+```text
+Hi nyabwa! You've successfully authenticated, but GitHub does not provide shell access.
+```
+
+Updated the Git remote from HTTPS to SSH:
+
+```bash
+git remote set-url origin git@github.com:nyabwa/Joebot.git
+```
+
+### Result
+
+Pushed successfully to GitHub.
+
+Current remote:
+
+```text
+git@github.com:nyabwa/Joebot.git
+```
+
+GitHub `main` is now at:
+
+```text
+4102f8a Fix JoeBot link and getdp handling
+```
+
+Local branch status:
+
+```text
+main tracks origin/main
+working tree clean
+```
+
+## 12. Remaining Operational Notes
 
 ### GitHub
 
-The repo exists:
+The repo exists and is pushable from this machine over SSH:
 
 ```text
-https://github.com/nyabwa/Joebot
+git@github.com:nyabwa/Joebot.git
 ```
 
-But pushing from this local machine still requires a working GitHub auth method:
+Do not paste Personal Access Tokens into chat. If a token is exposed, revoke it immediately at:
 
-- Personal Access Token for HTTPS, or
-- SSH key added to GitHub, or
-- GitHub CLI login.
+```text
+https://github.com/settings/tokens
+```
 
 ### AWS
 
@@ -422,4 +504,3 @@ The current reliable deployment path is SSH/SCP with:
 ```
 
 Do not commit or upload that `.pem` file.
-
