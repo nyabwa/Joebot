@@ -576,24 +576,29 @@ Be concise — this is WhatsApp.'''
 @app.route('/get-news', methods=['POST'])
 def get_news():
     import urllib.request as ur
+    import xml.etree.ElementTree as ET
     try:
         req = ur.Request(
-            'https://newsapi.org/v2/top-headlines?country=ke&apiKey=demo&pageSize=5',
+            'https://news.google.com/rss?hl=en-KE&gl=KE&ceid=KE:en',
             headers={'User-Agent': 'Mozilla/5.0'}
         )
-        # Fallback to Groq-generated news summary if API unavailable
-        raise Exception('Use Groq fallback')
-    except:
-        from groq import Groq
-        client = Groq(api_key=os.getenv('GROQ_API_KEY'))
-        response = client.chat.completions.create(
-            model='llama-3.3-70b-versatile',
-            messages=[{
-                'role': 'user',
-                'content': 'What are the most likely top news stories in Kenya today? Give 5 realistic headline-style news items. Format as numbered list. Note these are AI-generated summaries, not live news.'
-            }]
-        )
-        return jsonify({'result': '📰 *Kenya News (AI Summary)*\n\n' + response.choices[0].message.content.strip()})
+        with ur.urlopen(req, timeout=10) as resp:
+            feed = resp.read()
+
+        root = ET.fromstring(feed)
+        items = root.findall('./channel/item')[:5]
+        if not items:
+            return jsonify({'result': '❌ Could not fetch live Kenya headlines right now.'})
+
+        lines = []
+        for index, item in enumerate(items, 1):
+            title = item.findtext('title', default='Untitled').strip()
+            link = item.findtext('link', default='').strip()
+            lines.append(f'{index}. {title}\n{link}')
+
+        return jsonify({'result': '📰 *Kenya News (Live Headlines)*\n\n' + '\n\n'.join(lines)})
+    except Exception as e:
+        return jsonify({'result': f'❌ Could not fetch live Kenya headlines: {str(e)}'})
 
 @app.route('/get-forex', methods=['POST'])
 def get_forex():
@@ -616,16 +621,14 @@ def get_forex():
 
 @app.route('/get-fuel', methods=['POST'])
 def get_fuel():
-    from groq import Groq
-    client = Groq(api_key=os.getenv('GROQ_API_KEY'))
-    response = client.chat.completions.create(
-        model='llama-3.3-70b-versatile',
-        messages=[{
-            'role': 'user',
-            'content': 'What are the current approximate fuel prices in Kenya per litre for petrol, diesel and kerosene? Give realistic figures based on your knowledge. Format clearly. Note these are estimates.'
-        }]
-    )
-    return jsonify({'result': '⛽ *Kenya Fuel Prices (Estimate)*\n\n' + response.choices[0].message.content.strip()})
+    return jsonify({
+        'result': (
+            '⛽ *Kenya Fuel Prices*\n\n'
+            'Live EPRA price extraction is not configured yet, so I will not guess current pump prices.\n\n'
+            'Check the official EPRA pump price page:\n'
+            'https://www.epra.go.ke/EPRA%20Pump%20Prices'
+        )
+    })
 
 @app.route('/get-verse', methods=['POST'])
 def get_verse():
@@ -1292,28 +1295,14 @@ def check_phone():
                 results.append(f'📍 Location: {nv.get("location") or "Unknown"}')
             else:
                 results.append(f'❌ Invalid or unrecognized number')
-                # Fallback to Groq analysis
-                from groq import Groq
-                client = Groq(api_key=os.getenv('GROQ_API_KEY'))
-                response = client.chat.completions.create(
-                    model='llama-3.3-70b-versatile',
-                    messages=[{'role': 'user', 'content': f'Analyze phone number +{number}: country, carrier, line type, region. Be specific about Kenyan numbers (254): Safaricom 07xx/01xx, Airtel 073x/010x, Telkom 077x.'}]
-                )
-                results.append(response.choices[0].message.content.strip())
         except Exception as e:
             results.append(f'⚠️ NumVerify error: {str(e)}')
     else:
-        # Groq fallback
-        from groq import Groq
-        client = Groq(api_key=os.getenv('GROQ_API_KEY'))
-        response = client.chat.completions.create(
-            model='llama-3.3-70b-versatile',
-            messages=[{'role': 'user', 'content': f'Analyze phone number +{number}: country, carrier, line type, region. Be specific about Kenyan numbers (254): Safaricom 07xx/01xx, Airtel 073x/010x, Telkom 077x.'}]
-        )
-        results.append(response.choices[0].message.content.strip())
+        results.append('⚠️ Live phone validation is not configured. Set NUMVERIFY_API_KEY to enable verified carrier and line-type checks.')
 
     results.append(f'\n🔗 https://www.truecaller.com/search/ke/{number}')
     return jsonify({'result': '\n'.join(results)})
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    debug = os.getenv('FLASK_DEBUG', '').lower() in ('1', 'true', 'yes')
+    app.run(host='127.0.0.1', debug=debug, port=5000)

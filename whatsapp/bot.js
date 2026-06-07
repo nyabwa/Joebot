@@ -501,10 +501,13 @@ async function handleCommand(sock, sender, text) {
             const dlDir2 = path.join(__dirname, 'downloads')
             fs.mkdirSync(dlDir2, { recursive: true })
             try {
-                const { stdout } = await execAsync(
-                    `/usr/local/bin/yt-dlp -x --audio-format mp3 --output "${path.join(dlDir2, '%(title)s.%(ext)s')}" --print after_move:filepath "${arg}"`,
-                    { timeout: 120000 }
-                )
+                const { stdout } = await execFileAsync(YTDLP_PATH, [
+                    '-x',
+                    '--audio-format', 'mp3',
+                    '--output', path.join(dlDir2, '%(title)s.%(ext)s'),
+                    '--print', 'after_move:filepath',
+                    arg
+                ], { timeout: 120000, maxBuffer: 1024 * 1024 })
                 const filePath = stdout.trim().split('\n').pop()
                 if (!filePath || !fs.existsSync(filePath)) { await sock.sendMessage(sender, { text: '❌ Failed.' }); break }
                 await sock.sendMessage(sender, { audio: fs.readFileSync(filePath), mimetype: 'audio/mp4', ptt: false })
@@ -527,10 +530,14 @@ async function handleCommand(sock, sender, text) {
             try {
                 const isUrl = arg.startsWith('http')
                 const searchArg = isUrl ? arg : `ytsearch1:${arg}`
-                const { stdout } = await execAsync(
-                    `/usr/local/bin/yt-dlp -x --audio-format mp3 --audio-quality 0 --output "${outTpl}" --print after_move:filepath "${searchArg}"`,
-                    { timeout: 120000 }
-                )
+                const { stdout } = await execFileAsync(YTDLP_PATH, [
+                    '-x',
+                    '--audio-format', 'mp3',
+                    '--audio-quality', '0',
+                    '--output', outTpl,
+                    '--print', 'after_move:filepath',
+                    searchArg
+                ], { timeout: 120000, maxBuffer: 1024 * 1024 })
                 const filePath = stdout.trim().split('\n').pop()
                 if (!filePath || !fs.existsSync(filePath)) {
                     await sock.sendMessage(sender, { text: '❌ Could not find or download the song.' })
@@ -1506,8 +1513,8 @@ async function connectToWhatsApp() {
                 }
             }
 
-            // --- IMAGE ANALYSIS ---
-            if (msgType === 'imageMessage' && (text?.startsWith('/analyze') || text?.startsWith('/describe'))) {
+            // --- IMAGE ANALYSIS / STICKER ---
+            if (msgType === 'imageMessage' && (text?.startsWith('/analyze') || text?.startsWith('/describe') || text?.trim().toLowerCase() === '/sticker')) {
                 console.log(`🖼️ Image from ${sender}`)
                 try {
                     const buffer = await downloadMediaMessage(msg, 'buffer', {})
@@ -1644,5 +1651,6 @@ const sendServer = http.createServer(async (req, res) => {
     }
 })
 
-sendServer.listen(5001, () => console.log('Send server listening on port 5001'))
+const SEND_SERVER_HOST = process.env.SEND_SERVER_HOST || '127.0.0.1'
+sendServer.listen(5001, SEND_SERVER_HOST, () => console.log(`Send server listening on ${SEND_SERVER_HOST}:5001`))
 connectToWhatsApp()

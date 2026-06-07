@@ -504,3 +504,72 @@ The current reliable deployment path is SSH/SCP with:
 ```
 
 Do not commit or upload that `.pem` file.
+
+## 13. Project Review Hardening
+
+### Date
+
+2026-06-07
+
+### Issues Found and Fixed
+
+1. `/sticker` media handling was unreachable.
+
+Cause: image sticker conversion lived inside the `/analyze` and `/describe` image condition, so an image captioned `/sticker` did not enter the conversion path.
+
+Fix: expanded the image media handler to include `/sticker`.
+
+2. `/mp3` and `/song` used shell command strings.
+
+Cause: user-provided URLs/search text were interpolated into shell commands passed to `exec`.
+
+Fix: switched both paths to `execFile` argument arrays using the configured `YTDLP_PATH`, matching the safer `/download` implementation.
+
+3. The internal WhatsApp send server listened on all interfaces.
+
+Cause: `sendServer.listen(5001)` defaults to binding broadly.
+
+Fix: bound it to `127.0.0.1` by default, with `SEND_SERVER_HOST` available as an override.
+
+4. `/news` generated fake current headlines when live news was unavailable.
+
+Cause: the route intentionally skipped the NewsAPI request and asked Groq for "most likely" current news.
+
+Fix: replaced the generated fallback with live Google News RSS headlines for Kenya. If live fetch fails, the bot now says it cannot fetch live headlines instead of inventing them.
+
+5. `/fuel` generated estimated current fuel prices.
+
+Cause: the route asked Groq to provide approximate current Kenya fuel prices from model knowledge.
+
+Fix: removed the generated estimate. The bot now refuses to guess and points users to the official EPRA pump price page until live EPRA extraction is implemented.
+
+6. `/phone` OSINT guessed carrier and line data when NumVerify was not configured.
+
+Cause: missing `NUMVERIFY_API_KEY` triggered a Groq fallback for phone-number analysis.
+
+Fix: removed the guessing fallback. The bot now says live phone validation is not configured and keeps the Truecaller lookup link.
+
+7. Flask was running with debug mode enabled on AWS.
+
+Cause: `app.run(debug=True, port=5000)` was hardcoded.
+
+Fix: debug mode is now disabled by default and only enabled when `FLASK_DEBUG` is set to `1`, `true`, or `yes`. Flask also binds to `127.0.0.1`.
+
+### Validation
+
+Local validation:
+
+```bash
+python3 -m py_compile app.py db.py classify_emails.py draft_replies.py read_emails.py scheduler.py summary.py
+cd whatsapp && npm test
+```
+
+AWS validation:
+
+```bash
+python3 -m py_compile app.py db.py classify_emails.py draft_replies.py read_emails.py scheduler.py summary.py
+cd /home/ubuntu/joebot/whatsapp && npm test
+pm2 restart joebot-flask joebot-whatsapp
+```
+
+Result: both PM2 services came back online. Flask logs confirmed `Debug mode: off`, and WhatsApp logs confirmed the send server is listening on `127.0.0.1:5001`.
