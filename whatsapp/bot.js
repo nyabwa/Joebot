@@ -1,4 +1,12 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, downloadMediaMessage } = require('@whiskeysockets/baileys')
+const {
+    default: makeWASocket,
+    useMultiFileAuthState,
+    DisconnectReason,
+    downloadMediaMessage,
+    getBinaryNodeChild,
+    jidNormalizedUser,
+    S_WHATSAPP_NET
+} = require('@whiskeysockets/baileys')
 const qrcode = require('qrcode-terminal')
 const fs = require('fs')
 const path = require('path')
@@ -135,6 +143,136 @@ function buildDownloadErrorMessage(err, url) {
         return 'No compatible video format was available for this link.'
     }
     return err.message.split('\n')[0]
+}
+
+function fetchBuffer(url, redirectCount = 0) {
+    return new Promise((resolve, reject) => {
+        if (redirectCount > 5) {
+            reject(new Error('Too many redirects'))
+            return
+        }
+
+        let parsed
+        try {
+            parsed = new URL(url)
+        } catch {
+            reject(new Error('Invalid URL returned by WhatsApp'))
+            return
+        }
+
+        const client = parsed.protocol === 'http:' ? http : https
+        const req = client.get(parsed, { timeout: 30000 }, (response) => {
+            if ([301, 302, 303, 307, 308].includes(response.statusCode) && response.headers.location) {
+                response.resume()
+                const redirectUrl = new URL(response.headers.location, parsed).toString()
+                fetchBuffer(redirectUrl, redirectCount + 1).then(resolve).catch(reject)
+                return
+            }
+
+            if (response.statusCode < 200 || response.statusCode >= 300) {
+                response.resume()
+                reject(new Error(`HTTP ${response.statusCode}`))
+                return
+            }
+
+            const chunks = []
+            response.on('data', chunk => chunks.push(chunk))
+            response.on('end', () => resolve(Buffer.concat(chunks)))
+        })
+
+        req.on('timeout', () => {
+            req.destroy(new Error('Request timed out'))
+        })
+        req.on('error', reject)
+    })
+}
+
+function withTimeout(promise, timeoutMs, label) {
+    let timer
+    const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs)
+    })
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
+}
+
+async function resolveWhatsAppJids(sock, phoneNumber) {
+    const candidates = [`${phoneNumber}@s.whatsapp.net`]
+
+    try {
+        const mappingPath = path.join(AUTH_DIR, `lid-mapping-${phoneNumber}.json`)
+        if (fs.existsSync(mappingPath)) {
+            const lid = JSON.parse(fs.readFileSync(mappingPath, 'utf8'))
+            if (lid) {
+                candidates.unshift(`${lid}@lid`)
+            }
+        }
+    } catch (err) {
+        console.error(`getdp LID mapping read failed for ${phoneNumber}:`, err.message)
+    }
+
+    try {
+        const results = await withTimeout(sock.onWhatsApp(phoneNumber), 15000, 'WhatsApp number lookup')
+        for (const result of results || []) {
+            if (result?.exists && result?.jid) {
+                candidates.unshift(result.jid)
+            }
+        }
+    } catch (err) {
+        console.error(`getdp number lookup failed for ${phoneNumber}:`, err.message)
+    }
+
+    return [...new Set(candidates)]
+}
+
+async function rawProfilePictureUrl(sock, jid, type) {
+    const normalizedJid = jidNormalizedUser(jid)
+    const result = await sock.query({
+        tag: 'iq',
+        attrs: {
+            target: normalizedJid,
+            to: S_WHATSAPP_NET,
+            type: 'get',
+            xmlns: 'w:profile:picture'
+        },
+        content: [{ tag: 'picture', attrs: { type, query: 'url' } }]
+    }, 10000)
+
+    const picture = getBinaryNodeChild(result, 'picture')
+    return picture?.attrs?.url
+}
+
+async function findProfilePictureUrl(sock, jids) {
+    const attempts = []
+
+    for (const jid of jids) {
+        for (const type of ['image', 'preview']) {
+            try {
+                const url = await withTimeout(
+                    rawProfilePictureUrl(sock, jid, type),
+                    12000,
+                    `Raw profile picture lookup for ${jid}`
+                )
+                if (url) return { url, jid, type, method: 'raw' }
+                attempts.push(`${jid}/${type}/raw: no URL returned`)
+            } catch (err) {
+                attempts.push(`${jid}/${type}/raw: ${err.message}`)
+            }
+
+            try {
+                const url = await withTimeout(
+                    sock.profilePictureUrl(jid, type, 15000),
+                    20000,
+                    `Profile picture lookup for ${jid}`
+                )
+                if (url) return { url, jid, type, method: 'baileys' }
+                attempts.push(`${jid}/${type}/baileys: no URL returned`)
+            } catch (err) {
+                attempts.push(`${jid}/${type}/baileys: ${err.message}`)
+            }
+        }
+    }
+
+    throw new Error(attempts.join(' | '))
 }
 
 async function downloadVideoWithYtDlp(url, outputTemplate) {
@@ -289,23 +427,31 @@ async function handleCommand(sock, sender, text) {
         case '/getdp': {
             if (!arg) { await sock.sendMessage(sender, { text: '❌ Usage: /getdp 254712345678' }); break }
             try {
-                const targetJid = `${arg.replace(/\+/g, '')}@s.whatsapp.net`
-                const ppUrl = await sock.profilePictureUrl(targetJid, 'image')
-                const savePath = path.join(__dirname, 'downloads', `dp_${arg}.jpg`)
-                fs.mkdirSync(path.join(__dirname, 'downloads'), { recursive: true })
-                const file = fs.createWriteStream(savePath)
-                const request = https.get(ppUrl, (response) => {
-                    response.pipe(file)
-                    file.on('finish', async () => {
-                        file.close()
-                        await sock.sendMessage(sender, { image: fs.readFileSync(savePath), caption: `📸 Profile picture for ${arg}` })
-                    })
-                })
-                request.on('error', async (err) => {
-                    await sock.sendMessage(sender, { text: `❌ Network error: ${err.message}` })
+                const targetNumber = arg.replace(/\D/g, '')
+                if (!targetNumber) {
+                    await sock.sendMessage(sender, { text: '❌ Usage: /getdp 254712345678' })
+                    break
+                }
+
+                const targetJids = await resolveWhatsAppJids(sock, targetNumber)
+                console.log(`getdp candidates for ${targetNumber}: ${targetJids.join(', ')}`)
+
+                const profilePicture = await findProfilePictureUrl(sock, targetJids)
+                console.log(`getdp resolved ${targetNumber} via ${profilePicture.jid}/${profilePicture.type}/${profilePicture.method}`)
+
+                const imageBuffer = await fetchBuffer(profilePicture.url)
+                await sock.sendMessage(sender, {
+                    image: imageBuffer,
+                    caption: `📸 Profile picture for ${targetNumber}`
                 })
             } catch (err) {
-                await sock.sendMessage(sender, { text: `❌ Could not fetch DP. Privacy settings may be on.` })
+                console.error('getdp error:', err.message)
+                const timedOut = /timed out|timeout/i.test(err.message)
+                await sock.sendMessage(sender, {
+                    text: timedOut
+                        ? '❌ WhatsApp did not respond while fetching that DP. Try again, or ask the contact to message the bot first.'
+                        : '❌ Could not fetch DP. The number may not be reachable from this WhatsApp session, or profile photo privacy may block it.'
+                })
             }
             break
         }
@@ -1453,64 +1599,6 @@ async function connectToWhatsApp() {
                     })
                 }
             } catch (err) { console.error('Contact check error:', err.message) }
-
-            // --- AUTO URL DOWNLOAD ---
-            const urlMatch2 = text.match(/(https?:\/\/[^\s]+)/i)
-            const detectedUrl = urlMatch2 ? urlMatch2[0] : null
-
-            if (detectedUrl) {
-                console.log(`🔗 URL detected: ${detectedUrl} — attempting download`)
-
-                const dlDir = path.join(__dirname, 'downloads')
-                fs.mkdirSync(dlDir, { recursive: true })
-                const outTpl = path.join(dlDir, `%(title)s.%(ext)s`)
-
-                try {
-                    const filePath = await downloadVideoWithYtDlp(detectedUrl, outTpl)
-
-                    if (filePath && fs.existsSync(filePath)) {
-                        const sizeMB = formatFileSize(fs.statSync(filePath).size)
-                        const ext = path.extname(filePath).toLowerCase()
-
-                        console.log(`✓ Auto-downloaded: ${filePath} (${sizeMB}MB)`)
-
-                        if (['.mp4', '.mov', '.mkv', '.webm'].includes(ext)) {
-                            await sock.sendMessage(sender, {
-                                video: fs.readFileSync(filePath),
-                                caption: `✓ Downloaded (${sizeMB}MB)`
-                            })
-                        } else if (['.mp3', '.m4a', '.ogg', '.wav'].includes(ext)) {
-                            await sock.sendMessage(sender, {
-                                audio: fs.readFileSync(filePath),
-                                mimetype: 'audio/mp4',
-                                ptt: false
-                            })
-                        } else if (['.jpg', '.jpeg', '.png', '.webp'].includes(ext)) {
-                            await sock.sendMessage(sender, {
-                                image: fs.readFileSync(filePath),
-                                caption: `✓ Downloaded (${sizeMB}MB)`
-                            })
-                        } else {
-                            await sock.sendMessage(sender, {
-                                document: fs.readFileSync(filePath),
-                                mimetype: 'application/octet-stream',
-                                fileName: path.basename(filePath)
-                            })
-                        }
-                        fs.unlinkSync(filePath)
-                        continue // skip AI flow — we already handled this message
-                    } else {
-                        // yt-dlp found nothing — fall through to AI flow
-                        console.log('No downloadable content found — passing to AI flow')
-                    }
-                } catch (err) {
-                    console.log(`URL download failed (${err.message.split('\n')[0]})`)
-                    const isFB1422 = detectedUrl.includes('facebook.com') || detectedUrl.includes('fb.watch')
-                    const errorMessage = buildDownloadErrorMessage(err, detectedUrl)
-                    await sock.sendMessage(sender, { text: isFB1422 ? `❌ Facebook downloads are temporarily broken.\n\nyt-dlp releases a fix within days. Try again soon.` : `❌ Download failed: ${errorMessage}` })
-                    continue // skip AI flow after a download error
-                }
-            }
 
             // --- NORMAL AI FLOW ---
             console.log('Calling Flask...')
