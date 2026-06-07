@@ -1,0 +1,680 @@
+{
+  "sheng": [
+    {
+      "received": "Niaje manze",
+      "reply": "Poa tu, wewe je?"
+    },
+    {
+      "received": "Uko wapi saa hii",
+      "reply": "Niko home, mbona?"
+    },
+    {
+      "received": "Tukutane lini",
+      "reply": "Kesho iko sawa kwako?"
+    },
+    {
+      "received": "Umeskia ile story",
+      "reply": "Hapana bana, niambie"
+    },
+    {
+      "received": "Rada",
+      "reply": "Rada kabisa"
+    },
+    {
+      "received": "Uko fiti",
+      "reply": "Niko fiti maze, wewe je"
+    },
+    {
+      "received": "Unanikula",
+      "reply": "Haha maze relax"
+    },
+    {
+      "received": "Sema kitu",
+      "reply": "Niko hapa, niambie"
+    },
+    {
+      "received": "Unaenda campo",
+      "reply": "Ndio, mbona unauliza"
+    },
+    {
+      "received": "Boss niko na shida kidogo",
+      "reply": "Sema bana nikusaidie aje"
+    },
+    {
+      "received": "Maze uko aje leo",
+      "reply": "Niko sawa tu buda, wewe?"
+    },
+    {
+      "received": "Leo kuna plans gani",
+      "reply": "Bado sijadecide, maybe kutoka later"
+    },
+    {
+      "received": "Ulishika assignment",
+      "reply": "Eeh nilimaliza jana usiku"
+    },
+    {
+      "received": "Kwani ulipotea wapi",
+      "reply": "Nilikuwa busy kidogo na mambo za shule"
+    },
+    {
+      "received": "Twende base jioni",
+      "reply": "Sawa maze, nitakushow nikifika"
+    },
+    {
+      "received": "Mbona hujareply",
+      "reply": "Simu ilikuwa imezima bana"
+    },
+    {
+      "received": "Kuna mchezo leo?",
+      "reply": "Ndio manze, tunakam saa kumi"
+    },
+    {
+      "received": "Uko na dooh kidogo",
+      "reply": "Kidogo tu, unahitaji ngapi?"
+    },
+    {
+      "received": "Nitumie location",
+      "reply": "Ngoja nikudrop sai hivi"
+    },
+    {
+      "received": "Kumbe ulienda bila kusema",
+      "reply": "Walai ilikuwa impromptu"
+    },
+    {
+      "received": "Inakuaje msee?",
+      "reply": "Iko fiti sana, story za leo?"
+    },
+    {
+      "received": "Uko na form yoyote?",
+      "reply": "Bado maze, nimezubaa tu."
+    },
+    {
+      "received": "Hio luku ni moto",
+      "reply": "Shukran buda, nimejituma kiasi."
+    },
+    {
+      "received": "Nichekie hio risto",
+      "reply": "Sawa, acha nicheki alafu nikushow."
+    },
+    {
+      "received": "Uko mtaa gani saa hii?",
+      "reply": "Niko base, unataka kucome?"
+    },
+    {
+      "received": "Zii, siwezi make",
+      "reply": "Haina mambo, tutaonana baadaye."
+    },
+    {
+      "received": "Leta mbogi basi",
+      "reply": "Wanakam, tuko njiani."
+    },
+    {
+      "received": "Hio naree imeweza",
+      "reply": "Maze, hio ni ukweli tupu."
+    },
+    {
+      "received": "Manze niko broke",
+      "reply": "Pole jo, mambo itajipa tu."
+    },
+    {
+      "received": "Umecheki msupa wako?",
+      "reply": "Bado maze, mbona amesemaje?"
+    },
+    {
+      "received": "Form ya sato inasema aje?",
+      "reply": "Sijui bado, tutaongea ikikaribia."
+    },
+    {
+      "received": "Nitumie ile ngoma",
+      "reply": "Ngoja nifike kejani nitume."
+    },
+    {
+      "received": "Uko jam?",
+      "reply": "Eeh manze, Thika Road imeshikana sana."
+    },
+    {
+      "received": "Leo Arsenal inacheza",
+      "reply": "Najua, niko tayari kuwacheki."
+    },
+    {
+      "received": "Uko na punch?",
+      "reply": "Zii buda, niko dry sana leo."
+    },
+    {
+      "received": "Huyo dem amekataa",
+      "reply": "Achana naye, utapata mwingine."
+    },
+    {
+      "received": "Tupatane hapo town",
+      "reply": "Sawa, saa ngapi?"
+    },
+    {
+      "received": "Kuna msosi?",
+      "reply": "Eeh, nimepika manze. Utakam?"
+    },
+    {
+      "received": "Niko na deal fulani",
+      "reply": "Nishow rada, inaweza?"
+    },
+    {
+      "received": "Umeona ile video?",
+      "reply": "Eeh nimeiona, inabamba sana."
+    },
+    {
+      "received": "Unashuka wapi?",
+      "reply": "Nashuka hapa mbele kiasi."
+    },
+    {
+      "received": "Buda umepotea",
+      "reply": "Niko tu, shughuli zimekuwa mob."
+    },
+    {
+      "received": "Utaweza kufika?",
+      "reply": "Nitatry my best, nitakushow."
+    },
+    {
+      "received": "Vipi mambo?",
+      "reply": "Poa sana, wewe unasemaje?"
+    },
+    {
+      "received": "Kuna form gani wikiendi?",
+      "reply": "Tunaweza enda kuleva kiasi."
+    },
+    {
+      "received": "Nilikuona jana",
+      "reply": "Hukushtua mbona? Nilikuwa na haraka."
+    },
+    {
+      "received": "Mzinga ni ngapi?",
+      "reply": "Inategemea, utabuy gani?"
+    },
+    {
+      "received": "Sina fare",
+      "reply": "Acha nikutumie kakitu saa hii."
+    },
+    {
+      "received": "Umefika wapi?",
+      "reply": "Niko kwa nduthi, nakam."
+    },
+    {
+      "received": "Gari imeharibika",
+      "reply": "Pole manze, unahitaji msaada?"
+    },
+    {
+      "received": "Hio ngori",
+      "reply": "Bana, sijui tutafanya aje."
+    },
+    {
+      "received": "Kwani umejam?",
+      "reply": "Zii, niko sawa tu."
+    },
+    {
+      "received": "Uko job?",
+      "reply": "Eeh niko hustle, nitakucall baadaye."
+    },
+    {
+      "received": "Ni kubaya",
+      "reply": "Pole maze, mambo itakuwa fiti."
+    },
+    {
+      "received": "Weka stori",
+      "reply": "Hakuna stori mpya, ni zile zile tu."
+    },
+    {
+      "received": "Umeniboo",
+      "reply": "Pole buda, nilikuwa busy."
+    },
+    {
+      "received": "Nitumie number ya fundi",
+      "reply": "Sawa, nakutumia sai."
+    },
+    {
+      "received": "Uko area?",
+      "reply": "Eeh niko mtaa, unakam?"
+    },
+    {
+      "received": "Huyu msee anabore",
+      "reply": "Mkaushie tu, asikusumbue."
+    },
+    {
+      "received": "Rada ni chafu",
+      "reply": "Cheza chini, tutasort hio ishu."
+    }
+  ],
+  "kiswahili": [
+    {
+      "received": "Habari yako",
+      "reply": "Nzuri sana, wewe je?"
+    },
+    {
+      "received": "Umefika nyumbani",
+      "reply": "Ndio nimefika, asante"
+    },
+    {
+      "received": "Tutaonana lini",
+      "reply": "Kesho inawezekana, utakuwa free?"
+    },
+    {
+      "received": "Unaenda wapi",
+      "reply": "Naenda ofisini, kuna nini?"
+    },
+    {
+      "received": "Pole sana",
+      "reply": "Asante sana, Mungu akubariki"
+    },
+    {
+      "received": "Umepata kazi",
+      "reply": "Bado natafuta, nakushukuru kwa kuuliza"
+    },
+    {
+      "received": "Karibu sana",
+      "reply": "Asante, furaha kukuona"
+    },
+    {
+      "received": "Umeamkaje leo",
+      "reply": "Nimeamka vizuri sana, asante"
+    },
+    {
+      "received": "Una shughuli gani leo",
+      "reply": "Ninaenda sokoni baadaye"
+    },
+    {
+      "received": "Utakula nini mchana",
+      "reply": "Labda wali na maharagwe"
+    },
+    {
+      "received": "Umesoma kwa mtihani",
+      "reply": "Ndio, nimejitahidi kiasi"
+    },
+    {
+      "received": "Unaweza kunisaidia",
+      "reply": "Ndio bila shida, niambie"
+    },
+    {
+      "received": "Mbona umenyamaza sana",
+      "reply": "Nilikuwa nafikiria mambo kadhaa"
+    },
+    {
+      "received": "Tutapanga lini safari",
+      "reply": "Wiki ijayo inaweza kuwa sawa"
+    },
+    {
+      "received": "Umeshakunywa chai",
+      "reply": "Bado kidogo, nitaandaa sasa hivi"
+    },
+    {
+      "received": "Habari za asubuhi?",
+      "reply": "Njema, hofu kwako?"
+    },
+    {
+      "received": "Umelala salama?",
+      "reply": "Salama kabisa, nashukuru."
+    },
+    {
+      "received": "Chakula kiko tayari?",
+      "reply": "Tayari kabisa, karibu tule."
+    },
+    {
+      "received": "Umeshaenda sokoni?",
+      "reply": "Bado, nitaenda jioni kukiwa baridi."
+    },
+    {
+      "received": "Naomba unikopeshe kitabu",
+      "reply": "Sawa, nitakuletea tukionana."
+    },
+    {
+      "received": "Mvua inanyesha huko?",
+      "reply": "Hapa jua ni kali sana leo."
+    },
+    {
+      "received": "Safari ilikuwaje?",
+      "reply": "Ilikuwa nzuri, japo ilichosha."
+    },
+    {
+      "received": "Tukutane saa ngapi?",
+      "reply": "Tukutane saa kumi na moja jioni."
+    },
+    {
+      "received": "Msalimie sana familia",
+      "reply": "Zimefika, nao wanatusalimia."
+    },
+    {
+      "received": "Umeona habari za leo?",
+      "reply": "Bado sijaangalia runinga kabisa."
+    },
+    {
+      "received": "Habari za mchana?",
+      "reply": "Nzuri sana, unaendeleaje?"
+    },
+    {
+      "received": "Umeshakula?",
+      "reply": "Ndio, nimekula. Wewe je?"
+    },
+    {
+      "received": "Nitakupigia baadaye",
+      "reply": "Sawa, ninasubiri simu yako."
+    },
+    {
+      "received": "Umeona ujumbe wangu?",
+      "reply": "Ndio, nimeuona sasa hivi."
+    },
+    {
+      "received": "Kazi inaendaje?",
+      "reply": "Inaenda vizuri, nashukuru."
+    },
+    {
+      "received": "Naweza kuja kwako?",
+      "reply": "Karibu sana, hakuna shida."
+    },
+    {
+      "received": "Tutaonana kanisani?",
+      "reply": "Ndio, nina mpango wa kuja."
+    },
+    {
+      "received": "Mungu akubariki",
+      "reply": "Amina, na wewe pia."
+    },
+    {
+      "received": "Nimefurahi kukuona",
+      "reply": "Mimi pia, karibu tena."
+    },
+    {
+      "received": "Uko na nafasi kesho?",
+      "reply": "Ndio, nitakuwa na nafasi jioni."
+    },
+    {
+      "received": "Tafadhali nitumie picha",
+      "reply": "Sawa, nakutumia sasa hivi."
+    },
+    {
+      "received": "Asante kwa msaada wako",
+      "reply": "Karibu, ni jukumu langu."
+    },
+    {
+      "received": "Umesikia habari hizo?",
+      "reply": "Bado, kuna nini kimetokea?"
+    },
+    {
+      "received": "Baba hajambo?",
+      "reply": "Hajambo, anaendelea vizuri."
+    },
+    {
+      "received": "Nitafika saa mbili",
+      "reply": "Sawa, nitakusubiri."
+    },
+    {
+      "received": "Unafanya nini sasa?",
+      "reply": "Ninasoma kitabu kidogo."
+    },
+    {
+      "received": "Gari limechelewa",
+      "reply": "Pole kwa usumbufu, vumilia tu."
+    },
+    {
+      "received": "Mkutano umekwisha?",
+      "reply": "Ndio, tumemaliza sasa hivi."
+    },
+    {
+      "received": "Karibu chakula",
+      "reply": "Asante, nimeshiba nashukuru."
+    },
+    {
+      "received": "Tukumbukane kwa maombi",
+      "reply": "Amina, hakika tutafanya hivyo."
+    },
+    {
+      "received": "Umeamua nini?",
+      "reply": "Bado ninafikiria, nitakujulisha."
+    },
+    {
+      "received": "Naomba namba yake",
+      "reply": "Sawa, nakutumia kwa ujumbe mfupi."
+    },
+    {
+      "received": "Usijali",
+      "reply": "Asante, nimeshukuru sana."
+    },
+    {
+      "received": "Mvua itanyesha leo",
+      "reply": "Kweli, mawingu ni mazito."
+    },
+    {
+      "received": "Safari njema",
+      "reply": "Asante, tutaonana nikirudi."
+    },
+    {
+      "received": "Una swali lolote?",
+      "reply": "Hapana, nimeelewa vizuri."
+    },
+    {
+      "received": "Nitakutumia pesa",
+      "reply": "Sawa, nitashukuru sana."
+    },
+    {
+      "received": "Umekuwa kimya",
+      "reply": "Samahani, nilikuwa na majukumu mengi."
+    },
+    {
+      "received": "Tafadhali nisamehe",
+      "reply": "Usijali, yameshapita."
+    },
+    {
+      "received": "Karibu nyumbani",
+      "reply": "Asante sana."
+    }
+  ],
+  "english": [
+    {
+      "received": "Hey are you free later",
+      "reply": "Yeah what's up?"
+    },
+    {
+      "received": "Can we talk",
+      "reply": "Sure, what's going on?"
+    },
+    {
+      "received": "Did you see my message",
+      "reply": "Just saw it, will get back to you shortly"
+    },
+    {
+      "received": "Thanks for your help",
+      "reply": "No problem at all"
+    },
+    {
+      "received": "When are you free",
+      "reply": "Tomorrow works for me, you?"
+    },
+    {
+      "received": "Are you coming today",
+      "reply": "Yes, I should be there by evening"
+    },
+    {
+      "received": "Did the meeting go well",
+      "reply": "Yeah, it was actually productive"
+    },
+    {
+      "received": "Can you send me the file",
+      "reply": "Sure, give me a minute"
+    },
+    {
+      "received": "How have you been lately",
+      "reply": "I've been good, just busy with work"
+    },
+    {
+      "received": "Do you want to join us later",
+      "reply": "Sounds good, what time?"
+    },
+    {
+      "received": "I appreciate your support",
+      "reply": "Always happy to help"
+    },
+    {
+      "received": "Did you finish the project",
+      "reply": "Almost done, just polishing a few things"
+    },
+    {
+      "received": "Let's catch up soon",
+      "reply": "Definitely, it's been a while"
+    },
+    {
+      "received": "How was your weekend?",
+      "reply": "It was pretty relaxing, yours?"
+    },
+    {
+      "received": "Are you watching the game tonight?",
+      "reply": "Probably not, I have an early start tomorrow."
+    },
+    {
+      "received": "Could you help me with this?",
+      "reply": "I'd be happy to, send it over."
+    },
+    {
+      "received": "Sorry I'm running late",
+      "reply": "No worries, I just got here myself."
+    },
+    {
+      "received": "What do you think of the new place?",
+      "reply": "It's actually much better than I expected."
+    },
+    {
+      "received": "Did you hear back from them?",
+      "reply": "Not yet, I'm still waiting for an email."
+    },
+    {
+      "received": "I'm heading out now",
+      "reply": "Safe travels, text me when you arrive."
+    },
+    {
+      "received": "Do you need a ride?",
+      "reply": "That would be great, thanks for offering."
+    },
+    {
+      "received": "Is the weather nice out there?",
+      "reply": "It's a bit cloudy but not too cold."
+    },
+    {
+      "received": "I'll talk to you later",
+      "reply": "Sounds good, have a great day!"
+    },
+    {
+      "received": "Can we reschedule?",
+      "reply": "Sure, what time works best for you?"
+    },
+    {
+      "received": "Please review the document",
+      "reply": "I will take a look and get back to you."
+    },
+    {
+      "received": "Are you joining the call?",
+      "reply": "Yes, jumping on in a minute."
+    },
+    {
+      "received": "Have a great weekend!",
+      "reply": "Thanks, you too!"
+    },
+    {
+      "received": "What's your availability next week?",
+      "reply": "I'm mostly free on Tuesday and Thursday."
+    },
+    {
+      "received": "Did you get my email?",
+      "reply": "Yes, I'm working on a reply now."
+    },
+    {
+      "received": "I need some advice",
+      "reply": "Sure, what's on your mind?"
+    },
+    {
+      "received": "Congratulations on the achievement!",
+      "reply": "Thank you so much, I appreciate it."
+    },
+    {
+      "received": "Are we still on for lunch?",
+      "reply": "Yes, see you at noon."
+    },
+    {
+      "received": "Can you send the agenda?",
+      "reply": "I'll email it to you shortly."
+    },
+    {
+      "received": "Let me know when you arrive",
+      "reply": "Will do, shouldn't be too long."
+    },
+    {
+      "received": "I'm feeling under the weather",
+      "reply": "Oh no, get some rest and feel better soon."
+    },
+    {
+      "received": "Have you seen this article?",
+      "reply": "Not yet, I'll read it later today."
+    },
+    {
+      "received": "Could we have a quick chat?",
+      "reply": "Of course, call me whenever you're ready."
+    },
+    {
+      "received": "Thanks for the update",
+      "reply": "You're welcome, let me know if you need anything else."
+    },
+    {
+      "received": "When is the deadline?",
+      "reply": "It's due by Friday EOD."
+    },
+    {
+      "received": "I'll be out of office tomorrow",
+      "reply": "Noted, enjoy your day off!"
+    },
+    {
+      "received": "Do you have the link?",
+      "reply": "Yes, here it is."
+    },
+    {
+      "received": "That sounds like a plan",
+      "reply": "Great, let's proceed with that."
+    },
+    {
+      "received": "I'm almost there",
+      "reply": "Okay, take your time."
+    },
+    {
+      "received": "Let's touch base later",
+      "reply": "Sounds good to me."
+    },
+    {
+      "received": "Any updates on this?",
+      "reply": "Nothing new yet, I'll keep you posted."
+    },
+    {
+      "received": "I completely forgot, sorry!",
+      "reply": "No worries, it happens."
+    },
+    {
+      "received": "Are you busy right now?",
+      "reply": "A little bit, can I call you back?"
+    },
+    {
+      "received": "Let's go grab some coffee",
+      "reply": "I'm down, let's go."
+    },
+    {
+      "received": "Nice job on the presentation",
+      "reply": "Thank you, glad it went well."
+    },
+    {
+      "received": "Can you cover for me?",
+      "reply": "Sure, I can handle it."
+    },
+    {
+      "received": "It was nice meeting you",
+      "reply": "Likewise, let's keep in touch."
+    },
+    {
+      "received": "I'm checking on the status",
+      "reply": "I'll look into it and let you know."
+    },
+    {
+      "received": "See you tomorrow",
+      "reply": "See you!"
+    }
+  ]
+}

@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JoeBot — WhatsApp Reviews</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;700;800&display=swap');
+  :root {
+    --bg: #0a0a0a; --surface: #111; --border: #1e1e1e;
+    --accent: #00ff88; --danger: #ff4444; --text: #e8e8e8; --muted: #555;
+    --wa: #25D366;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font-family: 'Syne', sans-serif; padding: 2rem 1rem; }
+  .container { max-width: 800px; margin: 0 auto; }
+  header { margin-bottom: 2.5rem; }
+  .tag { font-family: 'Space Mono', monospace; font-size: 0.65rem; color: var(--wa); border: 1px solid var(--wa); display: inline-block; padding: 0.2rem 0.6rem; margin-bottom: 0.8rem; letter-spacing: 0.15em; }
+  h1 { font-size: 2.2rem; font-weight: 800; letter-spacing: -0.02em; }
+  h1 span { color: var(--wa); }
+  .nav { display: flex; gap: 1rem; margin-bottom: 2rem; }
+  .nav a { font-family: 'Space Mono', monospace; font-size: 0.7rem; color: var(--muted); text-decoration: none; padding: 0.4rem 0.8rem; border: 1px solid var(--border); }
+  .nav a:hover { color: var(--text); border-color: var(--text); }
+  .stats { display: flex; gap: 1rem; margin-bottom: 2.5rem; flex-wrap: wrap; }
+  .stat { background: var(--surface); border: 1px solid var(--border); padding: 0.8rem 1.2rem; flex: 1; min-width: 120px; }
+  .stat-num { font-size: 1.8rem; font-weight: 800; }
+  .stat-num.green { color: var(--wa); }
+  .stat-num.muted { color: var(--muted); }
+  .stat-label { font-family: 'Space Mono', monospace; font-size: 0.6rem; color: var(--muted); letter-spacing: 0.1em; margin-top: 0.2rem; }
+  .section-title { font-family: 'Space Mono', monospace; font-size: 0.65rem; color: var(--muted); letter-spacing: 0.15em; text-transform: uppercase; margin-bottom: 1rem; }
+  .draft-card { background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--wa); margin-bottom: 1.2rem; padding: 1.4rem; }
+  .original-msg { background: #0a0a0a; border: 1px solid var(--border); padding: 0.8rem 1rem; margin-bottom: 1rem; }
+  .original-label { font-family: 'Space Mono', monospace; font-size: 0.6rem; color: var(--muted); letter-spacing: 0.1em; margin-bottom: 0.4rem; }
+  .original-text { font-size: 0.85rem; color: var(--text); }
+  .lang-badge { font-family: 'Space Mono', monospace; font-size: 0.6rem; padding: 0.2rem 0.6rem; background: rgba(37,211,102,0.1); color: var(--wa); border: 1px solid var(--wa); display: inline-block; margin-bottom: 1rem; }
+  .draft-from { font-family: 'Space Mono', monospace; font-size: 0.65rem; color: var(--muted); margin-bottom: 0.8rem; }
+  .draft-body { width: 100%; background: #0a0a0a; border: 1px solid var(--border); color: var(--text); font-family: 'Space Mono', monospace; font-size: 0.78rem; line-height: 1.7; padding: 1rem; resize: vertical; min-height: 80px; margin-bottom: 1rem; }
+  .draft-body:focus { outline: none; border-color: var(--wa); }
+  .actions { display: flex; gap: 0.8rem; }
+  .btn { font-family: 'Space Mono', monospace; font-size: 0.7rem; padding: 0.6rem 1.2rem; border: none; cursor: pointer; letter-spacing: 0.05em; font-weight: 700; transition: opacity 0.2s; }
+  .btn:hover { opacity: 0.8; }
+  .btn-approve { background: var(--wa); color: #000; }
+  .btn-skip { background: transparent; border: 1px solid var(--muted); color: var(--muted); }
+  .sent-card { background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--muted); margin-bottom: 0.8rem; padding: 1rem 1.2rem; display: flex; justify-content: space-between; align-items: center; }
+  .sent-msg { font-size: 0.85rem; }
+  .sent-from { font-family: 'Space Mono', monospace; font-size: 0.65rem; color: var(--muted); margin-top: 0.2rem; }
+  .badge { font-family: 'Space Mono', monospace; font-size: 0.6rem; padding: 0.2rem 0.6rem; }
+  .badge-sent { background: rgba(37,211,102,0.1); color: var(--wa); border: 1px solid var(--wa); }
+  .badge-skipped { background: rgba(85,85,85,0.2); color: var(--muted); border: 1px solid var(--muted); }
+  .empty { font-family: 'Space Mono', monospace; font-size: 0.75rem; color: var(--muted); padding: 1.5rem; text-align: center; border: 1px dashed var(--border); }
+  .toast { position: fixed; bottom: 2rem; right: 2rem; padding: 0.8rem 1.4rem; font-family: 'Space Mono', monospace; font-size: 0.75rem; display: none; z-index: 999; }
+  .toast.success { background: var(--wa); color: #000; }
+  .toast.error { background: var(--danger); color: #fff; }
+  .section { margin-bottom: 3rem; }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <div class="tag">WhatsApp Review Console</div>
+    <h1>JOE<span>BOT</span> — WA</h1>
+  </header>
+
+  <nav class="nav">
+    <a href="/">📧 Email Drafts</a>
+    <a href="/wa-reviews">💬 WhatsApp Drafts</a>
+  </nav>
+
+  <div class="stats">
+    <div class="stat">
+      <div class="stat-num green">{{ pending|length }}</div>
+      <div class="stat-label">Pending Review</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num green">{{ sent|length }}</div>
+      <div class="stat-label">Sent</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num muted">{{ skipped|length }}</div>
+      <div class="stat-label">Skipped</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">// Pending Review</div>
+    {% if pending %}
+      {% for draft in pending %}
+      <div class="draft-card" id="card-{{ loop.index }}">
+        <div class="draft-from">From: {{ draft.from }}</div>
+        <div class="original-msg">
+          <div class="original-label">ORIGINAL MESSAGE</div>
+          <div class="original-text">{{ draft.original_message }}</div>
+        </div>
+        <span class="lang-badge">{{ draft.detected_language }}</span>
+        <textarea class="draft-body" id="body-{{ loop.index }}">{{ draft.draft_reply }}</textarea>
+        <div class="actions">
+          <button class="btn btn-approve" onclick="approve('{{ draft.id }}', '{{ draft.from }}', {{ loop.index }})">Send Reply</button>
+          <button class="btn btn-skip" onclick="skip('{{ draft.id }}', {{ loop.index }})">Skip</button>
+        </div>
+      </div>
+      {% endfor %}
+    {% else %}
+      <div class="empty">No pending WhatsApp drafts.</div>
+    {% endif %}
+  </div>
+
+  <div class="section">
+    <div class="section-title">// Sent</div>
+    {% if sent %}
+      {% for draft in sent %}
+      <div class="sent-card">
+        <div>
+          <div class="sent-msg">{{ draft.draft_reply }}</div>
+          <div class="sent-from">{{ draft.from }}</div>
+        </div>
+        <span class="badge badge-sent">SENT</span>
+      </div>
+      {% endfor %}
+    {% else %}
+      <div class="empty">No sent replies yet.</div>
+    {% endif %}
+  </div>
+
+  <div class="section">
+    <div class="section-title">// Skipped</div>
+    {% if skipped %}
+      {% for draft in skipped %}
+      <div class="sent-card">
+        <div>
+          <div class="sent-msg">{{ draft.original_message }}</div>
+          <div class="sent-from">{{ draft.from }}</div>
+        </div>
+        <span class="badge badge-skipped">SKIPPED</span>
+      </div>
+      {% endfor %}
+    {% else %}
+      <div class="empty">No skipped drafts.</div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  function showToast(msg, type) {
+    const t = document.getElementById('toast')
+    t.textContent = msg
+    t.className = `toast ${type}`
+    t.style.display = 'block'
+    setTimeout(() => t.style.display = 'none', 3000)
+  }
+
+  async function approve(id, to, index) {
+    const reply = document.getElementById(`body-${index}`).value
+    const card = document.getElementById(`card-${index}`)
+    card.style.opacity = '0.5'
+    card.style.pointerEvents = 'none'
+    try {
+      const res = await fetch('/wa-approve', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ id, to, reply })
+      })
+      const data = await res.json()
+      if (data.success) {
+        card.remove()
+        showToast('WhatsApp reply sent!', 'success')
+      } else {
+        card.style.opacity = '1'
+        card.style.pointerEvents = 'auto'
+        showToast('Error: ' + data.message, 'error')
+      }
+    } catch (err) {
+      card.style.opacity = '1'
+      card.style.pointerEvents = 'auto'
+      showToast('Network error', 'error')
+    }
+  }
+
+  async function skip(id, index) {
+    await fetch('/wa-skip', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ id })
+    })
+    document.getElementById(`card-${index}`).remove()
+    showToast('Draft skipped', 'success')
+  }
+</script>
+</body>
+</html>

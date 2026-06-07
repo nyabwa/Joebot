@@ -1,0 +1,33 @@
+# Sensitive files
+.env
+credentials.json
+token.json
+
+# Auth sessions
+auth_info/
+auth_info_baileys/
+whatsapp/auth_info/
+
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Node
+whatsapp/node_modules/
+node_modules/
+
+# Downloads and media
+whatsapp/downloads/
+whatsapp/saved_statuses/
+whatsapp/view_once/
+whatsapp/wa_drafts/
+
+# Zip files
+*.zip
+
+# Drafts
+drafts/
+
+# Bot save files
+whatsapp/bot.js.save

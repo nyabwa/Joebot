@@ -1,0 +1,22 @@
+{
+  "name": "whatsapp",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "node bot.js",
+    "relink": "node bot.js --reset-auth",
+    "test": "node --check bot.js && node --check connect.js && node --check index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@whiskeysockets/baileys": "^7.0.0-rc10",
+    "dotenv": "^17.4.2",
+    "groq-sdk": "^1.2.0",
+    "link-preview-js": "^3.2.0",
+    "qrcode-terminal": "^0.12.0"
+  }
+}

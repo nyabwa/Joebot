@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JoeBot — Draft Review</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;700;800&display=swap');
+  :root {
+    --bg: #0a0a0a; --surface: #111; --border: #1e1e1e;
+    --accent: #00ff88; --danger: #ff4444; --warn: #ffaa00;
+    --text: #e8e8e8; --muted: #555;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font-family: 'Syne', sans-serif; padding: 2rem 1rem; }
+  .container { max-width: 800px; margin: 0 auto; }
+  header { margin-bottom: 2.5rem; }
+  .tag { font-family: 'Space Mono', monospace; font-size: 0.65rem; color: var(--accent); border: 1px solid var(--accent); display: inline-block; padding: 0.2rem 0.6rem; margin-bottom: 0.8rem; letter-spacing: 0.15em; }
+  h1 { font-size: 2.2rem; font-weight: 800; letter-spacing: -0.02em; }
+  h1 span { color: var(--accent); }
+  .stats { display: flex; gap: 1rem; margin: 1.5rem 0 2.5rem; flex-wrap: wrap; }
+  .stat { background: var(--surface); border: 1px solid var(--border); padding: 0.8rem 1.2rem; flex: 1; min-width: 120px; }
+  .stat-num { font-size: 1.8rem; font-weight: 800; }
+  .stat-num.green { color: var(--accent); }
+  .stat-num.red { color: var(--danger); }
+  .stat-num.muted { color: var(--muted); }
+  .stat-label { font-family: 'Space Mono', monospace; font-size: 0.6rem; color: var(--muted); letter-spacing: 0.1em; margin-top: 0.2rem; }
+  .section-title { font-family: 'Space Mono', monospace; font-size: 0.65rem; color: var(--muted); letter-spacing: 0.15em; text-transform: uppercase; margin-bottom: 1rem; }
+  .draft-card { background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--accent); margin-bottom: 1.2rem; padding: 1.4rem; }
+  .draft-meta { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.5rem; }
+  .draft-to { font-family: 'Space Mono', monospace; font-size: 0.7rem; color: var(--muted); }
+  .draft-subject { font-size: 1rem; font-weight: 700; margin-bottom: 0.3rem; }
+  .draft-timestamp { font-family: 'Space Mono', monospace; font-size: 0.6rem; color: var(--muted); }
+  .draft-body { width: 100%; background: #0a0a0a; border: 1px solid var(--border); color: var(--text); font-family: 'Space Mono', monospace; font-size: 0.78rem; line-height: 1.7; padding: 1rem; resize: vertical; min-height: 140px; margin: 1rem 0; }
+  .draft-body:focus { outline: none; border-color: var(--accent); }
+  .actions { display: flex; gap: 0.8rem; }
+  .btn { font-family: 'Space Mono', monospace; font-size: 0.7rem; padding: 0.6rem 1.2rem; border: none; cursor: pointer; letter-spacing: 0.05em; font-weight: 700; transition: opacity 0.2s; }
+  .btn:hover { opacity: 0.8; }
+  .btn-approve { background: var(--accent); color: #000; }
+  .btn-skip { background: transparent; border: 1px solid var(--muted); color: var(--muted); }
+  .sent-card { background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--muted); margin-bottom: 0.8rem; padding: 1rem 1.2rem; display: flex; justify-content: space-between; align-items: center; }
+  .sent-subject { font-size: 0.85rem; font-weight: 700; }
+  .sent-to { font-family: 'Space Mono', monospace; font-size: 0.65rem; color: var(--muted); margin-top: 0.2rem; }
+  .badge { font-family: 'Space Mono', monospace; font-size: 0.6rem; padding: 0.2rem 0.6rem; letter-spacing: 0.1em; }
+  .badge-sent { background: rgba(0,255,136,0.1); color: var(--accent); border: 1px solid var(--accent); }
+  .badge-skipped { background: rgba(85,85,85,0.2); color: var(--muted); border: 1px solid var(--muted); }
+  .empty { font-family: 'Space Mono', monospace; font-size: 0.75rem; color: var(--muted); padding: 1.5rem; text-align: center; border: 1px dashed var(--border); }
+  .toast { position: fixed; bottom: 2rem; right: 2rem; padding: 0.8rem 1.4rem; font-family: 'Space Mono', monospace; font-size: 0.75rem; display: none; z-index: 999; }
+  .toast.success { background: var(--accent); color: #000; }
+  .toast.error { background: var(--danger); color: #fff; }
+  .section { margin-bottom: 3rem; }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <div class="tag">Draft Review Console</div>
+    <h1>JOE<span>BOT</span></h1>
+  </header>
+
+  <div class="stats">
+    <div class="stat">
+      <div class="stat-num green">{{ pending|length }}</div>
+      <div class="stat-label">Pending Review</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num" style="color:var(--accent)">{{ sent|length }}</div>
+      <div class="stat-label">Sent</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num muted">{{ skipped|length }}</div>
+      <div class="stat-label">Skipped</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">// Pending Review</div>
+    {% if pending %}
+      {% for draft in pending %}
+      <div class="draft-card" id="card-{{ loop.index }}">
+        <div class="draft-meta">
+          <div>
+            <div class="draft-subject">{{ draft.subject }}</div>
+            <div class="draft-to">To: {{ draft.to }}</div>
+          </div>
+          <div class="draft-timestamp">{{ draft.timestamp }}</div>
+        </div>
+        <textarea class="draft-body" id="body-{{ loop.index }}">{{ draft.draft }}</textarea>
+        <div class="actions">
+          <button class="btn btn-approve" onclick="approve('{{ draft.id }}', '{{ draft.to }}', '{{ draft.subject }}', {{ loop.index }})">Send Email</button>
+          <button class="btn btn-skip" onclick="skip('{{ draft.id }}', {{ loop.index }})">Skip</button>
+        </div>
+      </div>
+      {% endfor %}
+    {% else %}
+      <div class="empty">No pending drafts. Run draft_replies.py to generate new ones.</div>
+    {% endif %}
+  </div>
+
+  <div class="section">
+    <div class="section-title">// Sent</div>
+    {% if sent %}
+      {% for draft in sent %}
+      <div class="sent-card">
+        <div>
+          <div class="sent-subject">{{ draft.subject }}</div>
+          <div class="sent-to">{{ draft.to }}</div>
+        </div>
+        <span class="badge badge-sent">SENT</span>
+      </div>
+      {% endfor %}
+    {% else %}
+      <div class="empty">No sent emails yet.</div>
+    {% endif %}
+  </div>
+
+  <div class="section">
+    <div class="section-title">// Skipped</div>
+    {% if skipped %}
+      {% for draft in skipped %}
+      <div class="sent-card">
+        <div>
+          <div class="sent-subject">{{ draft.subject }}</div>
+          <div class="sent-to">{{ draft.to }}</div>
+        </div>
+        <span class="badge badge-skipped">SKIPPED</span>
+      </div>
+      {% endfor %}
+    {% else %}
+      <div class="empty">No skipped drafts.</div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  function showToast(msg, type) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.className = `toast ${type}`;
+    t.style.display = 'block';
+    setTimeout(() => t.style.display = 'none', 3000);
+  }
+
+  async function approve(id, to, subject, index) {
+    const draft = document.getElementById(`body-${index}`).value;
+    const card = document.getElementById(`card-${index}`);
+    card.style.opacity = '0.5';
+    card.style.pointerEvents = 'none';
+    try {
+      const res = await fetch('/approve', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ id, draft, to, subject })
+      });
+      const data = await res.json();
+      if (data.success) {
+        card.remove();
+        showToast('Email sent successfully', 'success');
+      } else {
+        card.style.opacity = '1';
+        card.style.pointerEvents = 'auto';
+        showToast('Error: ' + data.message, 'error');
+      }
+    } catch (err) {
+      card.style.opacity = '1';
+      card.style.pointerEvents = 'auto';
+      showToast('Network error', 'error');
+    }
+  }
+
+  async function skip(id, index) {
+    await fetch('/skip', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ id })
+    });
+    document.getElementById(`card-${index}`).remove();
+    showToast('Draft skipped', 'success');
+  }
+</script>
+</body>
+</html>
