@@ -116,6 +116,18 @@ Nginx uses two source files:
 - `deploy/nginx-rate-limit.conf` installs the shared limit zone under `/etc/nginx/conf.d/`.
 - `deploy/nginx-joebot.conf` applies the zone to `POST /control/login`.
 
+## Download Proxy Routing
+
+`YTDLP_PROXY_URL` is applied only to YouTube inputs by default. TikTok, Instagram, Facebook, and other supported sites connect directly because routing them through the YouTube proxy can break extraction.
+
+Override the proxy allowlist with a comma-separated value when needed:
+
+```bash
+YTDLP_PROXY_DOMAINS=youtube.com,youtu.be
+```
+
+JoeBot redacts proxy credentials from `yt-dlp` errors before logging or replying in WhatsApp.
+
 The dashboard does not expose Baileys session files. A logged-out session must be reset intentionally with:
 
 ```bash

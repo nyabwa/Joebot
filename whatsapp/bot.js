@@ -20,6 +20,11 @@ const { promisify } = require('util')
 const { ActivityLog, RuntimeSettings } = require('./control-state')
 const { runCleanup } = require('./cleanup')
 const { ConcurrencyLimiter, CooldownManager } = require('./rate-limits')
+const {
+    getYtDlpProxyArgs,
+    parseProxyDomains,
+    safeYtDlpErrorDetails
+} = require('./yt-dlp-options')
 const execAsync = promisify(exec)
 const execFileAsync = promisify(execFile)
 
@@ -29,6 +34,7 @@ const RESET_AUTH = process.argv.includes('--reset-auth')
 const YTDLP_PATH = process.env.YTDLP_PATH || '/usr/local/bin/yt-dlp'
 const YTDLP_COOKIES_PATH = process.env.YTDLP_COOKIES_PATH || path.join(__dirname, 'cookies.txt')
 const YTDLP_PROXY_URL = process.env.YTDLP_PROXY_URL || ''
+const YTDLP_PROXY_DOMAINS = parseProxyDomains(process.env.YTDLP_PROXY_DOMAINS)
 const MAX_DOWNLOAD_SIZE_MB = Number(process.env.WA_MAX_DOWNLOAD_MB || 50)
 const MAX_DOWNLOAD_SIZE_BYTES = MAX_DOWNLOAD_SIZE_MB * 1024 * 1024
 const FLASK_HOST = process.env.FLASK_HOST || '127.0.0.1'
@@ -203,8 +209,8 @@ function getYtDlpCookieArgs() {
     return fs.existsSync(YTDLP_COOKIES_PATH) ? ['--cookies', YTDLP_COOKIES_PATH] : []
 }
 
-function getYtDlpProxyArgs() {
-    return YTDLP_PROXY_URL ? ['--proxy', YTDLP_PROXY_URL] : []
+function proxyArgsForYtDlp(input) {
+    return getYtDlpProxyArgs(input, YTDLP_PROXY_URL, YTDLP_PROXY_DOMAINS)
 }
 
 function getYtDlpRuntimeArgs() {
@@ -212,8 +218,8 @@ function getYtDlpRuntimeArgs() {
 }
 
 function buildDownloadErrorMessage(err, url) {
-    const details = `${err.stderr || err.stdout || err.message || ''}`
-    if (/proxy|407 Proxy Authentication Required|tunnel connection failed|connection.*proxy/i.test(details)) {
+    const details = safeYtDlpErrorDetails(err)
+    if (/407 Proxy Authentication Required|proxy authentication|tunnel connection failed|connection.*proxy|proxy.*(?:failed|error|timed out|refused)/i.test(details)) {
         return 'Proxy connection failed. Check YTDLP_PROXY_URL credentials, host, and port.'
     }
     if (/Sign in to confirm.*not a bot|not a bot|Use --cookies|cookies-from-browser/i.test(details)) {
@@ -228,12 +234,15 @@ function buildDownloadErrorMessage(err, url) {
     if (/Requested format is not available/i.test(details)) {
         return 'No compatible video format was available for this link.'
     }
-    return err.message.split('\n')[0]
+    if (url.includes('tiktok.com') && /Unable to extract|TikTok|universal data|impersonat/i.test(details)) {
+        return 'TikTok could not provide this video. Try the link again later or use a different TikTok link.'
+    }
+    return 'The site did not provide a downloadable video. Try again later or use a different link.'
 }
 
 function buildSongDownloadErrorMessage(err) {
-    const details = `${err.stderr || err.stdout || err.message || ''}`
-    if (/proxy|407 Proxy Authentication Required|tunnel connection failed|connection.*proxy/i.test(details)) {
+    const details = safeYtDlpErrorDetails(err)
+    if (/407 Proxy Authentication Required|proxy authentication|tunnel connection failed|connection.*proxy|proxy.*(?:failed|error|timed out|refused)/i.test(details)) {
         return 'Proxy connection failed. Check the Decodo proxy credentials, host, and port.'
     }
     if (/Sign in to confirm.*not a bot|not a bot|Use --cookies|cookies-from-browser/i.test(details)) {
@@ -245,7 +254,7 @@ function buildSongDownloadErrorMessage(err) {
     if (/ffmpeg|ffprobe/i.test(details)) {
         return 'Audio conversion failed because ffmpeg is missing or failed on the server.'
     }
-    return err.message.split('\n')[0]
+    return 'The audio download failed. Try again later or use a different link or song name.'
 }
 
 function fetchBuffer(url, redirectCount = 0) {
@@ -393,7 +402,7 @@ async function downloadVideoWithYtDlp(url, outputTemplate) {
                 '--output', outputTemplate,
                 '--print', 'after_move:filepath',
                 ...getYtDlpRuntimeArgs(),
-                ...getYtDlpProxyArgs(),
+                ...proxyArgsForYtDlp(url),
                 ...getYtDlpCookieArgs(),
                 url
             ], { timeout: 120000, maxBuffer: 1024 * 1024 })
@@ -949,7 +958,8 @@ async function handleCommand(sock, sender, text, actorJid = sender) {
                         }
                         fs.unlinkSync(filePath)
                     } catch (err) {
-                        if (err.stderr) console.log('yt-dlp stderr:', err.stderr.slice(0, 500))
+                        const safeDetails = safeYtDlpErrorDetails(err)
+                        if (safeDetails) console.log('yt-dlp error:', safeDetails.slice(0, 500))
                         const isFB266 = arg.includes('facebook.com') || arg.includes('fb.watch')
                         const errorMessage = buildDownloadErrorMessage(err, arg)
                         await sock.sendMessage(sender, { text: isFB266 ? `❌ Facebook downloads are temporarily broken.\n\nyt-dlp releases a fix within days. Try again soon or update with:\nsudo yt-dlp -U` : `❌ Download failed: ${errorMessage}` })
@@ -977,7 +987,7 @@ async function handleCommand(sock, sender, text, actorJid = sender) {
                             '--output', path.join(dlDir2, '%(title)s.%(ext)s'),
                             '--print', 'after_move:filepath',
                             ...getYtDlpRuntimeArgs(),
-                            ...getYtDlpProxyArgs(),
+                            ...proxyArgsForYtDlp(arg),
                             ...getYtDlpCookieArgs(),
                             arg
                         ], { timeout: 120000, maxBuffer: 1024 * 1024 })
@@ -989,7 +999,8 @@ async function handleCommand(sock, sender, text, actorJid = sender) {
                         await sock.sendMessage(sender, { audio: fs.readFileSync(filePath), mimetype: 'audio/mp4', ptt: false })
                         fs.unlinkSync(filePath)
                     } catch (err) {
-                        if (err.stderr) console.log('yt-dlp mp3 stderr:', err.stderr.slice(0, 800))
+                        const safeDetails = safeYtDlpErrorDetails(err)
+                        if (safeDetails) console.log('yt-dlp mp3 error:', safeDetails.slice(0, 800))
                         await sock.sendMessage(sender, { text: `❌ Audio failed: ${buildSongDownloadErrorMessage(err)}` })
                     }
                 }
@@ -1022,7 +1033,7 @@ async function handleCommand(sock, sender, text, actorJid = sender) {
                             '--output', outTpl,
                             '--print', 'after_move:filepath',
                             ...getYtDlpRuntimeArgs(),
-                            ...getYtDlpProxyArgs(),
+                            ...proxyArgsForYtDlp(searchArg),
                             ...getYtDlpCookieArgs(),
                             searchArg
                         ], { timeout: 120000, maxBuffer: 1024 * 1024 })
@@ -1043,8 +1054,8 @@ async function handleCommand(sock, sender, text, actorJid = sender) {
                         fs.unlinkSync(filePath)
                         console.log(`✓ Song sent: ${songTitle}`)
                     } catch (err) {
-                        console.error('Song download error:', err.message)
-                        if (err.stderr) console.log('yt-dlp song stderr:', err.stderr.slice(0, 800))
+                        const safeDetails = safeYtDlpErrorDetails(err)
+                        if (safeDetails) console.error('Song download error:', safeDetails.slice(0, 800))
                         await sock.sendMessage(sender, { text: `❌ Download failed: ${buildSongDownloadErrorMessage(err)}` })
                     }
                 }
