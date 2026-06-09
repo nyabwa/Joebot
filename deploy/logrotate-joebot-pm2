@@ -1,0 +1,11 @@
+/home/ubuntu/.pm2/logs/*.log {
+    daily
+    maxsize 10M
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    su ubuntu ubuntu
+}

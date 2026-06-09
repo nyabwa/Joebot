@@ -1,0 +1,22 @@
+[Unit]
+Description=JoeBot retained media cleanup
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/joebot/whatsapp
+ExecStart=/usr/bin/node /home/ubuntu/joebot/whatsapp/cleanup.js
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=read-only
+ProtectSystem=strict
+ReadWritePaths=-/home/ubuntu/joebot/whatsapp/saved_statuses
+ReadWritePaths=-/home/ubuntu/joebot/whatsapp/anti_delete_cache
+ReadWritePaths=-/home/ubuntu/joebot/whatsapp/view_once
+ReadWritePaths=-/home/ubuntu/joebot/whatsapp/downloads

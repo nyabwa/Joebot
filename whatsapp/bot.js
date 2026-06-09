@@ -18,6 +18,7 @@ const https = require('https')
 const { exec, execFile } = require('child_process')
 const { promisify } = require('util')
 const { ActivityLog, RuntimeSettings } = require('./control-state')
+const { runCleanup } = require('./cleanup')
 const execAsync = promisify(exec)
 const execFileAsync = promisify(execFile)
 
@@ -44,6 +45,11 @@ const VIDEO_FORMATS = [
     'bv*[vcodec!*=h265]+ba/b[vcodec!*=h265]/b',
     'bv*+ba/best'
 ]
+try {
+    runCleanup()
+} catch (err) {
+    console.error('Startup cleanup error:', err.message)
+}
 let didResetAuth = false
 const runtimeSettings = new RuntimeSettings(path.join(DATA_DIR, 'runtime-settings.json'))
 const activityLog = new ActivityLog(path.join(DATA_DIR, 'activity.jsonl'))

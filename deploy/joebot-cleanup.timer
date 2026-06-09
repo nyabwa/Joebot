@@ -1,0 +1,11 @@
+[Unit]
+Description=Run JoeBot retained media cleanup hourly
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+AccuracySec=1min
+Unit=joebot-cleanup.service
+
+[Install]
+WantedBy=timers.target

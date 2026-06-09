@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node bot.js",
     "relink": "node bot.js --reset-auth",
-    "test": "node --check bot.js && node --check connect.js && node --check index.js && node --check control-state.js && node --test control-state.test.js"
+    "cleanup": "node cleanup.js",
+    "test": "node --check bot.js && node --check connect.js && node --check index.js && node --check control-state.js && node --check cleanup.js && node --test control-state.test.js cleanup.test.js"
   },
   "keywords": [],
   "author": "",

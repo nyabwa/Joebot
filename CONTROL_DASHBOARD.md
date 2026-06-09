@@ -78,6 +78,27 @@ The Nginx and systemd source configurations are in `deploy/`.
 
 Chats are currently retained in memory for `WA_MESSAGE_TTL_MS`, which defaults to 24 hours. A durable encrypted message database is required before treating the dashboard as a complete WhatsApp archive.
 
+## Retention Cleanup
+
+JoeBot applies these retention limits:
+
+- Saved statuses: 24 hours, with a 200 MB ceiling
+- Anti-delete media: 24 hours, with a 100 MB ceiling
+- View-once media: 24 hours
+- Temporary downloads: 2 hours, with a 50 MB ceiling
+- Activity log: 30 days, with a 20 MB ceiling
+- PM2 logs: daily rotation, seven compressed rotations, and a 10 MB maximum before rotation
+
+Media cleanup runs when the WhatsApp process starts and through the hourly `joebot-cleanup.timer`. Activity-log compaction runs inside the WhatsApp process to avoid racing with active writes.
+
+Useful production checks:
+
+```bash
+systemctl list-timers joebot-cleanup.timer
+journalctl -u joebot-cleanup.service --no-pager -n 100
+sudo systemctl start joebot-cleanup.service
+```
+
 The dashboard does not expose Baileys session files. A logged-out session must be reset intentionally with:
 
 ```bash

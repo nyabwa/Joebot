@@ -30,3 +30,16 @@ test('activity log stays bounded and returns newest entries first', () => {
 
     assert.deepEqual(log.recent().map(entry => entry.type), ['three', 'two'])
 })
+
+test('activity log compaction removes entries older than 30 days', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'joebot-log-retention-'))
+    const filePath = path.join(dir, 'activity.jsonl')
+    fs.writeFileSync(filePath, [
+        JSON.stringify({ timestamp: new Date(Date.now() - 31 * 86400000).toISOString(), type: 'old' }),
+        JSON.stringify({ timestamp: new Date().toISOString(), type: 'current' })
+    ].join('\n') + '\n')
+
+    const log = new ActivityLog(filePath)
+
+    assert.deepEqual(log.recent().map(entry => entry.type), ['current'])
+})

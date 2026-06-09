@@ -1,5 +1,6 @@
 const fs = require('fs')
 const path = require('path')
+const { cleanActivityLog, DEFAULT_POLICY } = require('./cleanup')
 
 const COMMANDS = [
     '/help', '/date', '/getdp', '/savestatus', '/download', '/mp3', '/song',
@@ -108,7 +109,10 @@ class ActivityLog {
         this.filePath = filePath
         this.maxEntries = maxEntries
         this.entries = []
+        this.compact()
         this.load()
+        this.compactionTimer = setInterval(() => this.compact(), 60 * 60 * 1000)
+        if (typeof this.compactionTimer.unref === 'function') this.compactionTimer.unref()
     }
 
     load() {
@@ -138,6 +142,10 @@ class ActivityLog {
         fs.mkdirSync(path.dirname(this.filePath), { recursive: true })
         fs.appendFileSync(this.filePath, `${JSON.stringify(entry)}\n`, 'utf8')
         return entry
+    }
+
+    compact() {
+        return cleanActivityLog(this.filePath, DEFAULT_POLICY.activity)
     }
 
     recent(limit = 100) {
