@@ -99,6 +99,23 @@ journalctl -u joebot-cleanup.service --no-pager -n 100
 sudo systemctl start joebot-cleanup.service
 ```
 
+## Rate Limiting
+
+The public login endpoint is limited by Nginx to five rapid POST attempts per IP, with a sustained rate of five attempts per minute. GET requests for the login page are not counted.
+
+JoeBot also applies per-actor command cooldowns:
+
+- `/download`, `/mp3`, `/song`: 30 seconds
+- `/summarize`, `/username`: 60 seconds
+- `/email`, `/breach`, `/phone`: 30 seconds
+
+Single-operation concurrency slots protect downloads and YouTube processing, Sherlock scans, image analysis, voice transcription, and PDF summarization. Rate-limit events are written to the activity log as `command_rate_limited` or `operation_rate_limited`.
+
+Nginx uses two source files:
+
+- `deploy/nginx-rate-limit.conf` installs the shared limit zone under `/etc/nginx/conf.d/`.
+- `deploy/nginx-joebot.conf` applies the zone to `POST /control/login`.
+
 The dashboard does not expose Baileys session files. A logged-out session must be reset intentionally with:
 
 ```bash

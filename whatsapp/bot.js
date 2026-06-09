@@ -19,6 +19,7 @@ const { exec, execFile } = require('child_process')
 const { promisify } = require('util')
 const { ActivityLog, RuntimeSettings } = require('./control-state')
 const { runCleanup } = require('./cleanup')
+const { ConcurrencyLimiter, CooldownManager } = require('./rate-limits')
 const execAsync = promisify(exec)
 const execFileAsync = promisify(execFile)
 
@@ -53,6 +54,10 @@ try {
 let didResetAuth = false
 const runtimeSettings = new RuntimeSettings(path.join(DATA_DIR, 'runtime-settings.json'))
 const activityLog = new ActivityLog(path.join(DATA_DIR, 'activity.jsonl'))
+const commandCooldowns = new CooldownManager()
+const operationLimiter = new ConcurrencyLimiter()
+const cooldownCleanupTimer = setInterval(() => commandCooldowns.prune(), 5 * 60 * 1000)
+if (typeof cooldownCleanupTimer.unref === 'function') cooldownCleanupTimer.unref()
 
 function resetAuthSession(reason) {
     if (fs.existsSync(AUTH_DIR)) {
@@ -761,7 +766,23 @@ function isOwnerActor(actorJid = '') {
     return !!actorNumber && actorNumber === OWNER_NUMBER_DIGITS
 }
 
-async function handleCommand(sock, sender, text) {
+async function runLimitedOperation(name, sock, sender, busyMessage, task) {
+    const release = operationLimiter.tryAcquire(name)
+    if (!release) {
+        activityLog.add('operation_rate_limited', { operation: name, sender })
+        await sock.sendMessage(sender, { text: busyMessage })
+        return false
+    }
+
+    try {
+        await task()
+        return true
+    } finally {
+        release()
+    }
+}
+
+async function handleCommand(sock, sender, text, actorJid = sender) {
     const parts = text.trim().split(' ')
     const command = parts[0].toLowerCase()
     const arg = parts.slice(1).join(' ').trim()
@@ -770,6 +791,22 @@ async function handleCommand(sock, sender, text) {
     if (!runtimeSettings.isCommandEnabled(command)) {
         activityLog.add('command_disabled', { command, sender })
         await sock.sendMessage(sender, { text: `⛔ ${command} is disabled in the JoeBot control dashboard.` })
+        return
+    }
+
+    const cooldown = arg
+        ? commandCooldowns.consume(actorJid, command)
+        : { allowed: true, retryAfterMs: 0 }
+    if (!cooldown.allowed) {
+        const retryAfterSeconds = Math.max(1, Math.ceil(cooldown.retryAfterMs / 1000))
+        activityLog.add('command_rate_limited', {
+            command,
+            actor: actorJid,
+            retryAfterSeconds
+        })
+        await sock.sendMessage(sender, {
+            text: `⏳ ${command} is cooling down. Try again in ${retryAfterSeconds} seconds.`
+        })
         return
     }
 
@@ -885,56 +922,78 @@ async function handleCommand(sock, sender, text) {
 
         case '/download': {
             if (!arg) { await sock.sendMessage(sender, { text: '❌ Usage: /download <url>' }); break }
-            await sock.sendMessage(sender, { text: `⏳ Downloading...\n${arg}` })
-            const dlDir = path.join(__dirname, 'downloads')
-            fs.mkdirSync(dlDir, { recursive: true })
-            const outTpl = path.join(dlDir, `%(title)s.%(ext)s`)
-            try {
-                const filePath = await downloadVideoWithYtDlp(arg, outTpl)
-                if (!filePath || !fs.existsSync(filePath)) { await sock.sendMessage(sender, { text: '❌ Download failed.' }); break }
-                const sizeMB = formatFileSize(fs.statSync(filePath).size)
-                const ext = path.extname(filePath).toLowerCase()
-                if (['.mp4', '.mov', '.mkv', '.webm'].includes(ext)) {
-                    await sock.sendMessage(sender, { video: fs.readFileSync(filePath), caption: `✓ ${sizeMB}MB` })
-                } else if (['.mp3', '.m4a', '.ogg', '.wav'].includes(ext)) {
-                    await sock.sendMessage(sender, { audio: fs.readFileSync(filePath), mimetype: 'audio/mp4', ptt: false })
-                } else {
-                    await sock.sendMessage(sender, { document: fs.readFileSync(filePath), mimetype: 'application/octet-stream', fileName: path.basename(filePath) })
+            await runLimitedOperation(
+                'downloads',
+                sock,
+                sender,
+                '⏳ Another download is already running. Try again when it finishes.',
+                async () => {
+                    await sock.sendMessage(sender, { text: `⏳ Downloading...\n${arg}` })
+                    const dlDir = path.join(__dirname, 'downloads')
+                    fs.mkdirSync(dlDir, { recursive: true })
+                    const outTpl = path.join(dlDir, `%(title)s.%(ext)s`)
+                    try {
+                        const filePath = await downloadVideoWithYtDlp(arg, outTpl)
+                        if (!filePath || !fs.existsSync(filePath)) {
+                            await sock.sendMessage(sender, { text: '❌ Download failed.' })
+                            return
+                        }
+                        const sizeMB = formatFileSize(fs.statSync(filePath).size)
+                        const ext = path.extname(filePath).toLowerCase()
+                        if (['.mp4', '.mov', '.mkv', '.webm'].includes(ext)) {
+                            await sock.sendMessage(sender, { video: fs.readFileSync(filePath), caption: `✓ ${sizeMB}MB` })
+                        } else if (['.mp3', '.m4a', '.ogg', '.wav'].includes(ext)) {
+                            await sock.sendMessage(sender, { audio: fs.readFileSync(filePath), mimetype: 'audio/mp4', ptt: false })
+                        } else {
+                            await sock.sendMessage(sender, { document: fs.readFileSync(filePath), mimetype: 'application/octet-stream', fileName: path.basename(filePath) })
+                        }
+                        fs.unlinkSync(filePath)
+                    } catch (err) {
+                        if (err.stderr) console.log('yt-dlp stderr:', err.stderr.slice(0, 500))
+                        const isFB266 = arg.includes('facebook.com') || arg.includes('fb.watch')
+                        const errorMessage = buildDownloadErrorMessage(err, arg)
+                        await sock.sendMessage(sender, { text: isFB266 ? `❌ Facebook downloads are temporarily broken.\n\nyt-dlp releases a fix within days. Try again soon or update with:\nsudo yt-dlp -U` : `❌ Download failed: ${errorMessage}` })
+                    }
                 }
-                fs.unlinkSync(filePath)
-            } catch (err) {
-                if (err.stderr) console.log('yt-dlp stderr:', err.stderr.slice(0, 500))
-                const isFB266 = arg.includes('facebook.com') || arg.includes('fb.watch')
-                const errorMessage = buildDownloadErrorMessage(err, arg)
-                await sock.sendMessage(sender, { text: isFB266 ? `❌ Facebook downloads are temporarily broken.\n\nyt-dlp releases a fix within days. Try again soon or update with:\nsudo yt-dlp -U` : `❌ Download failed: ${errorMessage}` })
-            }
+            )
             break
         }
 
         case '/mp3': {
             if (!arg) { await sock.sendMessage(sender, { text: '❌ Usage: /mp3 <url>' }); break }
-            await sock.sendMessage(sender, { text: `⏳ Extracting audio...` })
-            const dlDir2 = path.join(__dirname, 'downloads')
-            fs.mkdirSync(dlDir2, { recursive: true })
-            try {
-                const { stdout } = await execFileAsync(YTDLP_PATH, [
-                    '-x',
-                    '--audio-format', 'mp3',
-                    '--output', path.join(dlDir2, '%(title)s.%(ext)s'),
-                    '--print', 'after_move:filepath',
-                    ...getYtDlpRuntimeArgs(),
-                    ...getYtDlpProxyArgs(),
-                    ...getYtDlpCookieArgs(),
-                    arg
-                ], { timeout: 120000, maxBuffer: 1024 * 1024 })
-                const filePath = stdout.trim().split('\n').pop()
-                if (!filePath || !fs.existsSync(filePath)) { await sock.sendMessage(sender, { text: '❌ Failed.' }); break }
-                await sock.sendMessage(sender, { audio: fs.readFileSync(filePath), mimetype: 'audio/mp4', ptt: false })
-                fs.unlinkSync(filePath)
-            } catch (err) {
-                if (err.stderr) console.log('yt-dlp mp3 stderr:', err.stderr.slice(0, 800))
-                await sock.sendMessage(sender, { text: `❌ Audio failed: ${buildSongDownloadErrorMessage(err)}` })
-            }
+            await runLimitedOperation(
+                'downloads',
+                sock,
+                sender,
+                '⏳ Another download is already running. Try again when it finishes.',
+                async () => {
+                    await sock.sendMessage(sender, { text: `⏳ Extracting audio...` })
+                    const dlDir2 = path.join(__dirname, 'downloads')
+                    fs.mkdirSync(dlDir2, { recursive: true })
+                    try {
+                        const { stdout } = await execFileAsync(YTDLP_PATH, [
+                            '-x',
+                            '--audio-format', 'mp3',
+                            '--output', path.join(dlDir2, '%(title)s.%(ext)s'),
+                            '--print', 'after_move:filepath',
+                            ...getYtDlpRuntimeArgs(),
+                            ...getYtDlpProxyArgs(),
+                            ...getYtDlpCookieArgs(),
+                            arg
+                        ], { timeout: 120000, maxBuffer: 1024 * 1024 })
+                        const filePath = stdout.trim().split('\n').pop()
+                        if (!filePath || !fs.existsSync(filePath)) {
+                            await sock.sendMessage(sender, { text: '❌ Failed.' })
+                            return
+                        }
+                        await sock.sendMessage(sender, { audio: fs.readFileSync(filePath), mimetype: 'audio/mp4', ptt: false })
+                        fs.unlinkSync(filePath)
+                    } catch (err) {
+                        if (err.stderr) console.log('yt-dlp mp3 stderr:', err.stderr.slice(0, 800))
+                        await sock.sendMessage(sender, { text: `❌ Audio failed: ${buildSongDownloadErrorMessage(err)}` })
+                    }
+                }
+            )
             break
         }
 
@@ -943,45 +1002,53 @@ async function handleCommand(sock, sender, text) {
                 await sock.sendMessage(sender, { text: '❌ Usage: /song <song name or url>\nExample: /song Kendrick Lamar Not Like Us\nExample: /song https://youtube.com/...' })
                 break
             }
-            await sock.sendMessage(sender, { text: `🎵 Searching and downloading "${arg}"...` })
-            const dlDir = path.join(__dirname, 'downloads')
-            fs.mkdirSync(dlDir, { recursive: true })
-            const outTpl = path.join(dlDir, '%(title)s.%(ext)s')
-            try {
-                const isUrl = arg.startsWith('http')
-                const searchArg = isUrl ? arg : `ytsearch1:${arg}`
-                const { stdout } = await execFileAsync(YTDLP_PATH, [
-                    '-x',
-                    '--audio-format', 'mp3',
-                    '--audio-quality', '0',
-                    '--output', outTpl,
-                    '--print', 'after_move:filepath',
-                    ...getYtDlpRuntimeArgs(),
-                    ...getYtDlpProxyArgs(),
-                    ...getYtDlpCookieArgs(),
-                    searchArg
-                ], { timeout: 120000, maxBuffer: 1024 * 1024 })
-                const filePath = stdout.trim().split('\n').pop()
-                if (!filePath || !fs.existsSync(filePath)) {
-                    await sock.sendMessage(sender, { text: '❌ Could not find or download the song.' })
-                    break
+            await runLimitedOperation(
+                'downloads',
+                sock,
+                sender,
+                '⏳ Another download is already running. Try again when it finishes.',
+                async () => {
+                    await sock.sendMessage(sender, { text: `🎵 Searching and downloading "${arg}"...` })
+                    const dlDir = path.join(__dirname, 'downloads')
+                    fs.mkdirSync(dlDir, { recursive: true })
+                    const outTpl = path.join(dlDir, '%(title)s.%(ext)s')
+                    try {
+                        const isUrl = arg.startsWith('http')
+                        const searchArg = isUrl ? arg : `ytsearch1:${arg}`
+                        const { stdout } = await execFileAsync(YTDLP_PATH, [
+                            '-x',
+                            '--audio-format', 'mp3',
+                            '--audio-quality', '0',
+                            '--output', outTpl,
+                            '--print', 'after_move:filepath',
+                            ...getYtDlpRuntimeArgs(),
+                            ...getYtDlpProxyArgs(),
+                            ...getYtDlpCookieArgs(),
+                            searchArg
+                        ], { timeout: 120000, maxBuffer: 1024 * 1024 })
+                        const filePath = stdout.trim().split('\n').pop()
+                        if (!filePath || !fs.existsSync(filePath)) {
+                            await sock.sendMessage(sender, { text: '❌ Could not find or download the song.' })
+                            return
+                        }
+                        const sizeMB = (fs.statSync(filePath).size / 1024 / 1024).toFixed(1)
+                        const songTitle = path.basename(filePath, '.mp3')
+                        await sock.sendMessage(sender, {
+                            audio: fs.readFileSync(filePath),
+                            mimetype: 'audio/mpeg',
+                            ptt: false,
+                            fileName: `${songTitle}.mp3`
+                        })
+                        await sock.sendMessage(sender, { text: `✓ *${songTitle}*\n📦 Size: ${sizeMB}MB` })
+                        fs.unlinkSync(filePath)
+                        console.log(`✓ Song sent: ${songTitle}`)
+                    } catch (err) {
+                        console.error('Song download error:', err.message)
+                        if (err.stderr) console.log('yt-dlp song stderr:', err.stderr.slice(0, 800))
+                        await sock.sendMessage(sender, { text: `❌ Download failed: ${buildSongDownloadErrorMessage(err)}` })
+                    }
                 }
-                const sizeMB = (fs.statSync(filePath).size / 1024 / 1024).toFixed(1)
-                const songTitle = path.basename(filePath, '.mp3')
-                await sock.sendMessage(sender, {
-                    audio: fs.readFileSync(filePath),
-                    mimetype: 'audio/mpeg',
-                    ptt: false,
-                    fileName: `${songTitle}.mp3`
-                })
-                await sock.sendMessage(sender, { text: `✓ *${songTitle}*\n📦 Size: ${sizeMB}MB` })
-                fs.unlinkSync(filePath)
-                console.log(`✓ Song sent: ${songTitle}`)
-            } catch (err) {
-                console.error('Song download error:', err.message)
-                if (err.stderr) console.log('yt-dlp song stderr:', err.stderr.slice(0, 800))
-                await sock.sendMessage(sender, { text: `❌ Download failed: ${buildSongDownloadErrorMessage(err)}` })
-            }
+            )
             break
         }
 
@@ -1435,17 +1502,25 @@ async function handleCommand(sock, sender, text) {
                 await sock.sendMessage(sender, { text: '❌ Usage: /summarize <youtube_url>' })
                 break
             }
-            await sock.sendMessage(sender, { text: `⏳ Fetching transcript and summarizing...\n${arg}` })
-            try {
-                const result = await callFlaskPost('/summarize-youtube', { url: arg })
-                if (result.success) {
-                    await sock.sendMessage(sender, { text: `📺 *YouTube Summary*\n\n${result.result}` })
-                } else {
-                    await sock.sendMessage(sender, { text: `❌ ${result.result}` })
+            await runLimitedOperation(
+                'downloads',
+                sock,
+                sender,
+                '⏳ Another download or YouTube summary is already running. Try again when it finishes.',
+                async () => {
+                    await sock.sendMessage(sender, { text: `⏳ Fetching transcript and summarizing...\n${arg}` })
+                    try {
+                        const result = await callFlaskPost('/summarize-youtube', { url: arg })
+                        if (result.success) {
+                            await sock.sendMessage(sender, { text: `📺 *YouTube Summary*\n\n${result.result}` })
+                        } else {
+                            await sock.sendMessage(sender, { text: `❌ ${result.result}` })
+                        }
+                    } catch (err) {
+                        await sock.sendMessage(sender, { text: `❌ Error: ${err.message}` })
+                    }
                 }
-            } catch (err) {
-                await sock.sendMessage(sender, { text: `❌ Error: ${err.message}` })
-            }
+            )
             break
         }
 
@@ -1489,13 +1564,21 @@ async function handleCommand(sock, sender, text) {
                 await sock.sendMessage(sender, { text: '❌ Usage: /username <handle>\nExample: /username johndoe' })
                 break
             }
-            await sock.sendMessage(sender, { text: `🔍 Scanning @${arg} across 200+ platforms...\n\n⏳ This takes 30-60 seconds` })
-            try {
-                const result = await callFlaskPost('/check-username', { username: arg })
-                await sock.sendMessage(sender, { text: result.result })
-            } catch (err) {
-                await sock.sendMessage(sender, { text: `❌ Error: ${err.message}` })
-            }
+            await runLimitedOperation(
+                'sherlock',
+                sock,
+                sender,
+                '⏳ A username scan is already running. Try again when it finishes.',
+                async () => {
+                    await sock.sendMessage(sender, { text: `🔍 Scanning @${arg} across 200+ platforms...\n\n⏳ This takes 30-60 seconds` })
+                    try {
+                        const result = await callFlaskPost('/check-username', { username: arg })
+                        await sock.sendMessage(sender, { text: result.result })
+                    } catch (err) {
+                        await sock.sendMessage(sender, { text: `❌ Error: ${err.message}` })
+                    }
+                }
+            )
             break
         }
 
@@ -1697,6 +1780,7 @@ async function connectToWhatsApp() {
 
             const sender = msg.key.remoteJid
             const actorJid = msg.key.participant || sender
+            const commandActorJid = msg.key.fromMe ? OWNER_JID : actorJid
             const senderNumber = normalizeNumberFromJid(actorJid)
             const text = extractTextFromMessage(msg.message)
             const msgType = Object.keys(msg.message || {})[0] || ''
@@ -1862,7 +1946,7 @@ async function connectToWhatsApp() {
             // Handle owner/self commands sent from linked devices ("fromMe" messages)
             if (msg.key.fromMe) {
                 if (isCommand) {
-                    await handleCommand(sock, sender, text)
+                    await handleCommand(sock, sender, text, commandActorJid)
                 }
                 continue
             }
@@ -1870,17 +1954,27 @@ async function connectToWhatsApp() {
             // --- VOICE NOTE TRANSCRIPTION ---
             if (runtimeSettings.isFeatureEnabled('voiceTranscription') && msg.message?.audioMessage?.ptt === true) {
                 console.log(`🎤 Voice note from ${sender}`)
-                try {
-                    const buffer = await downloadMediaMessage(msg, 'buffer', {})
-                    const base64Audio = buffer.toString('base64')
-                    const result = await callFlaskPost('/transcribe', { audio: base64Audio })
-                    if (result.success && result.text) {
-                        await sock.sendMessage(OWNER_JID, {
-                            text: `🎤 *Voice Note Transcript*\n*From:* ${msg.pushName || sender}\n\n"${result.text}"`
-                        })
-                        await callFlask(sender, result.text)
+                await runLimitedOperation(
+                    'transcription',
+                    sock,
+                    sender,
+                    '⏳ Another voice note is being transcribed. Try again when it finishes.',
+                    async () => {
+                        try {
+                            const buffer = await downloadMediaMessage(msg, 'buffer', {})
+                            const base64Audio = buffer.toString('base64')
+                            const result = await callFlaskPost('/transcribe', { audio: base64Audio })
+                            if (result.success && result.text) {
+                                await sock.sendMessage(OWNER_JID, {
+                                    text: `🎤 *Voice Note Transcript*\n*From:* ${msg.pushName || sender}\n\n"${result.text}"`
+                                })
+                                await callFlask(sender, result.text)
+                            }
+                        } catch (err) {
+                            console.error('Transcription error:', err.message)
+                        }
                     }
-                } catch (err) { console.error('Transcription error:', err.message) }
+                )
                 continue
             }
 
@@ -1952,26 +2046,34 @@ async function connectToWhatsApp() {
                 const isPDF = doc.mimetype === 'application/pdf' || doc.fileName?.endsWith('.pdf')
                 if (isPDF) {
                     console.log(`📄 PDF received from ${sender}`)
-                    await sock.sendMessage(sender, { text: `📄 PDF received. Summarizing...` })
-                    try {
-                        const buffer = await downloadMediaMessage(msg, 'buffer', {})
-                        const base64PDF = buffer.toString('base64')
-                        const result = await callFlaskPost('/summarize-pdf', { pdf: base64PDF })
-                        if (result.success) {
-                            const preview = result.result.length > 1000
-                                ? result.result.slice(0, 1000) + '...'
-                                : result.result
-                            await sock.sendMessage(sender, { text: `📄 *PDF Summary*\n\n${preview}` })
-                            sock.sendMessage(OWNER_JID, {
-                                text: `📄 *PDF Summary*\n*From:* ${msg.pushName || sender}\n*File:* ${doc.fileName || 'document.pdf'}\n\n${preview}`
-                            }).catch(() => {})
-                        } else {
-                            await sock.sendMessage(sender, { text: `❌ ${result.result}` })
+                    await runLimitedOperation(
+                        'pdfSummary',
+                        sock,
+                        sender,
+                        '⏳ Another PDF is being summarized. Try again when it finishes.',
+                        async () => {
+                            await sock.sendMessage(sender, { text: `📄 PDF received. Summarizing...` })
+                            try {
+                                const buffer = await downloadMediaMessage(msg, 'buffer', {})
+                                const base64PDF = buffer.toString('base64')
+                                const result = await callFlaskPost('/summarize-pdf', { pdf: base64PDF })
+                                if (result.success) {
+                                    const preview = result.result.length > 1000
+                                        ? result.result.slice(0, 1000) + '...'
+                                        : result.result
+                                    await sock.sendMessage(sender, { text: `📄 *PDF Summary*\n\n${preview}` })
+                                    sock.sendMessage(OWNER_JID, {
+                                        text: `📄 *PDF Summary*\n*From:* ${msg.pushName || sender}\n*File:* ${doc.fileName || 'document.pdf'}\n\n${preview}`
+                                    }).catch(() => {})
+                                } else {
+                                    await sock.sendMessage(sender, { text: `❌ ${result.result}` })
+                                }
+                            } catch (err) {
+                                console.error('PDF error:', err.message)
+                                await sock.sendMessage(sender, { text: `❌ PDF processing failed: ${err.message}` })
+                            }
                         }
-                    } catch (err) {
-                        console.error('PDF error:', err.message)
-                        await sock.sendMessage(sender, { text: `❌ PDF processing failed: ${err.message}` })
-                    }
+                    )
                     continue
                 }
             }
@@ -2009,27 +2111,34 @@ async function connectToWhatsApp() {
                         }
                         continue
                     }
-                    const base64Image = buffer.toString('base64')
-                    const caption = msg.message.imageMessage.caption || ''
-                    const result = await callFlaskPost('/analyze-image', {
-                        image: base64Image,
-                        prompt: caption || 'Describe what you see in this image. Extract any text visible.'
-                    })
-                    console.log('Image analysis result:', JSON.stringify(result))
-                    if (result.success) {
-                        const preview = result.result.length > 1000
-                            ? result.result.slice(0, 1000) + '...'
-                            : result.result
-                        // Send to both the chat and owner
-                        sock.sendMessage(sender, {
-                            text: `🖼️ *Image Analysis*\n\n${preview}`
-                        }).catch(err => console.error('Send to sender error:', err.message))
-                        sock.sendMessage(OWNER_JID, {
-                            text: `🖼️ *Image Analysis*\n*From:* ${msg.pushName || sender}\n\n${preview}`
-                        }).catch(err => console.error('Send to owner error:', err.message))
-                    } else {
-                        console.error('Image analysis returned false success:', result)
-                    }
+                    await runLimitedOperation(
+                        'imageAnalysis',
+                        sock,
+                        sender,
+                        '⏳ Another image is being analyzed. Try again when it finishes.',
+                        async () => {
+                            const base64Image = buffer.toString('base64')
+                            const caption = msg.message.imageMessage.caption || ''
+                            const result = await callFlaskPost('/analyze-image', {
+                                image: base64Image,
+                                prompt: caption || 'Describe what you see in this image. Extract any text visible.'
+                            })
+                            console.log('Image analysis result:', JSON.stringify(result))
+                            if (result.success) {
+                                const preview = result.result.length > 1000
+                                    ? result.result.slice(0, 1000) + '...'
+                                    : result.result
+                                sock.sendMessage(sender, {
+                                    text: `🖼️ *Image Analysis*\n\n${preview}`
+                                }).catch(err => console.error('Send to sender error:', err.message))
+                                sock.sendMessage(OWNER_JID, {
+                                    text: `🖼️ *Image Analysis*\n*From:* ${msg.pushName || sender}\n\n${preview}`
+                                }).catch(err => console.error('Send to owner error:', err.message))
+                            } else {
+                                console.error('Image analysis returned false success:', result)
+                            }
+                        }
+                    )
                 } catch (err) {
                     console.error('Image analysis error:', err.message)
                 }
@@ -2044,7 +2153,7 @@ async function connectToWhatsApp() {
             // --- COMMAND HANDLER ---
             if (isCommand) {
                 if (isOwner) {
-                    await handleCommand(sock, sender, text)
+                    await handleCommand(sock, sender, text, commandActorJid)
                 } else {
                     await sock.sendMessage(OWNER_JID, {
                         text: `⚠️ *Intruder Alert*\n*Number:* ${senderNumber}\n*Command:* ${text}\n*Time:* ${new Date().toLocaleString('en-KE', { timeZone: 'Africa/Nairobi' })}`
