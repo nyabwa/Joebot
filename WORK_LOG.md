@@ -1,5 +1,16 @@
 # JoeBot Work Log
 
+## 2026-06-08: Control Dashboard
+
+Added a private JoeBot control dashboard at `/control`.
+
+- Flask owns password authentication, sessions, CSRF validation, and the browser UI.
+- The existing Baileys process exposes a loopback-only control API on port `5001`.
+- The dashboard can start or stop WhatsApp, gate every slash command, control background automation, view recent in-memory chats, send text messages, and inspect structured activity.
+- Runtime settings and activity are stored under ignored `whatsapp/data/`.
+- WhatsApp auth files are never exposed or reset from the dashboard.
+- Added Node tests for persistent settings and bounded activity state.
+
 Date: 2026-06-07
 
 This file summarizes the work completed so far, the cause of each issue, how it was fixed, and the current deployment state.

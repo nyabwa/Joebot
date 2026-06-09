@@ -2,7 +2,14 @@ from db import supabase
 import os
 import json
 import urllib.request
-from flask import Flask, render_template, request, jsonify
+import urllib.error
+import urllib.parse
+import functools
+import hmac
+import secrets
+import time
+from flask import Flask, render_template, request, jsonify, redirect, session, url_for
+from werkzeug.security import check_password_hash, generate_password_hash
 # pyrefly: ignore [missing-import]
 from dotenv import load_dotenv
 from google.auth.transport.requests import Request
@@ -18,8 +25,179 @@ from db import get_email_drafts, get_wa_drafts, update_status, save_wa_draft, ge
 
 load_dotenv()
 app = Flask(__name__)
+app.secret_key = os.getenv('FLASK_SECRET_KEY') or secrets.token_hex(32)
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Strict',
+    SESSION_COOKIE_SECURE=os.getenv('DASHBOARD_SECURE_COOKIES', '').lower() in ('1', 'true', 'yes')
+)
+
+DASHBOARD_PASSWORD = os.getenv('DASHBOARD_PASSWORD', '')
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
+DASHBOARD_AUTH_FILE = os.path.join(DATA_DIR, 'dashboard_auth.json')
+JOEBOT_CONTROL_TOKEN = os.getenv('JOEBOT_CONTROL_TOKEN', '')
+JOEBOT_CONTROL_URL = os.getenv('JOEBOT_CONTROL_URL', 'http://127.0.0.1:5001/control')
+CONTROL_PROXY_ROUTES = {
+    'state': ('GET',),
+    'logs': ('GET',),
+    'chats': ('GET',),
+    'messages': ('GET',),
+    'bot/start': ('POST',),
+    'bot/stop': ('POST',),
+    'send': ('POST',),
+    'command': ('PUT',),
+    'feature': ('PUT',)
+}
+dashboard_login_attempts = {}
 
 SCOPES = ['https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/gmail.readonly']
+
+def dashboard_required(view):
+    @functools.wraps(view)
+    def wrapped(*args, **kwargs):
+        if not session.get('dashboard_authenticated'):
+            if request.path.startswith('/control/api/'):
+                return jsonify({'error': 'Authentication required.'}), 401
+            return redirect(url_for('control_login'))
+        return view(*args, **kwargs)
+    return wrapped
+
+def is_loopback_address(address):
+    return address in ('127.0.0.1', '::1') or address.startswith('::ffff:127.0.0.1')
+
+def load_dashboard_auth():
+    if not os.path.exists(DASHBOARD_AUTH_FILE):
+        return None
+    try:
+        with open(DASHBOARD_AUTH_FILE, 'r', encoding='utf-8') as auth_file:
+            return json.load(auth_file)
+    except Exception:
+        return None
+
+def dashboard_is_configured():
+    return len(DASHBOARD_PASSWORD) >= 12 or load_dashboard_auth() is not None
+
+def verify_dashboard_password(password):
+    if len(DASHBOARD_PASSWORD) >= 12:
+        return hmac.compare_digest(password, DASHBOARD_PASSWORD)
+    saved = load_dashboard_auth()
+    return bool(saved and check_password_hash(saved.get('password_hash', ''), password))
+
+def save_dashboard_password(password):
+    if len(password) < 12:
+        raise ValueError('Password must contain at least 12 characters.')
+    os.makedirs(DATA_DIR, exist_ok=True)
+    temp_path = f'{DASHBOARD_AUTH_FILE}.{os.getpid()}.tmp'
+    with open(temp_path, 'w', encoding='utf-8') as auth_file:
+        json.dump({
+            'password_hash': generate_password_hash(password),
+            'created_at': time.time()
+        }, auth_file)
+        auth_file.write('\n')
+    os.chmod(temp_path, 0o600)
+    os.replace(temp_path, DASHBOARD_AUTH_FILE)
+
+def validate_dashboard_csrf():
+    expected = session.get('dashboard_csrf', '')
+    supplied = request.headers.get('X-CSRF-Token', '')
+    return bool(expected and supplied and hmac.compare_digest(expected, supplied))
+
+def dashboard_csrf_required(view):
+    @functools.wraps(view)
+    def wrapped(*args, **kwargs):
+        if not validate_dashboard_csrf():
+            return jsonify({'error': 'Request verification failed.'}), 403
+        return view(*args, **kwargs)
+    return wrapped
+
+def proxy_joebot_control(route):
+    allowed_methods = CONTROL_PROXY_ROUTES.get(route)
+    if not allowed_methods or request.method not in allowed_methods:
+        return jsonify({'error': 'Control route not allowed.'}), 404
+
+    query = urllib.parse.urlencode(request.args)
+    url = f'{JOEBOT_CONTROL_URL.rstrip("/")}/{route}'
+    if query:
+        url = f'{url}?{query}'
+
+    body = request.get_data() if request.method != 'GET' else None
+    headers = {'Accept': 'application/json'}
+    if body is not None:
+        headers['Content-Type'] = 'application/json'
+    if JOEBOT_CONTROL_TOKEN:
+        headers['X-JoeBot-Control'] = JOEBOT_CONTROL_TOKEN
+
+    proxied = urllib.request.Request(url, data=body, headers=headers, method=request.method)
+    try:
+        with urllib.request.urlopen(proxied, timeout=20) as response:
+            payload = response.read()
+            return app.response_class(payload, status=response.status, content_type='application/json')
+    except urllib.error.HTTPError as error:
+        return app.response_class(error.read(), status=error.code, content_type='application/json')
+    except Exception as error:
+        return jsonify({'error': f'WhatsApp control service unavailable: {error}'}), 503
+
+@app.route('/control/login', methods=['GET', 'POST'])
+def control_login():
+    if session.get('dashboard_authenticated'):
+        return redirect(url_for('control_dashboard'))
+
+    error = None
+    configured = dashboard_is_configured()
+    setup_mode = not configured
+    if request.method == 'POST':
+        address = request.remote_addr or 'unknown'
+        attempt = dashboard_login_attempts.get(address, {'count': 0, 'reset_at': 0})
+        if attempt['reset_at'] <= time.time():
+            attempt = {'count': 0, 'reset_at': time.time() + 300}
+
+        submitted_password = request.form.get('password', '')
+        if attempt['count'] >= 5:
+            error = 'Too many attempts. Try again in five minutes.'
+        elif setup_mode and not is_loopback_address(address):
+            error = 'First-time setup is only allowed from this computer.'
+        elif setup_mode:
+            try:
+                save_dashboard_password(submitted_password)
+                dashboard_login_attempts.pop(address, None)
+                session.clear()
+                session['dashboard_authenticated'] = True
+                session['dashboard_csrf'] = secrets.token_urlsafe(24)
+                return redirect(url_for('control_dashboard'))
+            except ValueError as setup_error:
+                error = str(setup_error)
+        elif verify_dashboard_password(submitted_password):
+            dashboard_login_attempts.pop(address, None)
+            session.clear()
+            session['dashboard_authenticated'] = True
+            session['dashboard_csrf'] = secrets.token_urlsafe(24)
+            return redirect(url_for('control_dashboard'))
+        else:
+            attempt['count'] += 1
+            dashboard_login_attempts[address] = attempt
+            error = 'Invalid password.'
+
+    return render_template('control_login.html', error=error, configured=configured, setup_mode=setup_mode)
+
+@app.route('/control/logout', methods=['POST'])
+@dashboard_required
+def control_logout():
+    if not validate_dashboard_csrf():
+        return jsonify({'error': 'Request verification failed.'}), 403
+    session.clear()
+    return jsonify({'success': True})
+
+@app.route('/control')
+@dashboard_required
+def control_dashboard():
+    return render_template('control.html', csrf_token=session['dashboard_csrf'])
+
+@app.route('/control/api/<path:route>', methods=['GET', 'POST', 'PUT'])
+@dashboard_required
+def control_api(route):
+    if request.method != 'GET' and not validate_dashboard_csrf():
+        return jsonify({'error': 'Request verification failed.'}), 403
+    return proxy_joebot_control(route)
 
 def get_gmail_service():
     creds = None
@@ -44,6 +222,7 @@ def send_email(to, subject, body):
     service.users().messages().send(userId='me', body={'raw': raw}).execute()
 
 @app.route('/')
+@dashboard_required
 def index():
     pending = get_email_drafts('pending_review')
     sent = get_email_drafts('sent')
@@ -51,6 +230,8 @@ def index():
     return render_template('index.html', pending=pending, sent=sent, skipped=skipped)
 
 @app.route('/approve', methods=['POST'])
+@dashboard_required
+@dashboard_csrf_required
 def approve():
     data = request.json
     record_id = data['id']
@@ -65,12 +246,15 @@ def approve():
         return jsonify({'success': False, 'message': str(e)})
 
 @app.route('/skip', methods=['POST'])
+@dashboard_required
+@dashboard_csrf_required
 def skip():
     data = request.json
     update_status('email_drafts', data['id'], 'skipped')
     return jsonify({'success': True})
 
 @app.route('/wa-reviews')
+@dashboard_required
 def wa_reviews():
     pending = get_wa_drafts('pending_review')
     sent = get_wa_drafts('sent')
@@ -258,6 +442,8 @@ FLAG: [yes or no]"""
     return jsonify({'result': result})
 
 @app.route('/wa-approve', methods=['POST'])
+@dashboard_required
+@dashboard_csrf_required
 def wa_approve():
     data = request.json
     record_id = data['id']
@@ -279,16 +465,21 @@ def wa_approve():
         return jsonify({'success': False, 'message': str(e)})
 
 @app.route('/wa-skip', methods=['POST'])
+@dashboard_required
+@dashboard_csrf_required
 def wa_skip():
     data = request.json
     update_status('wa_drafts', data['id'], 'skipped')
     return jsonify({'success': True})
 @app.route('/contacts')
+@dashboard_required
 def contacts():
     all_contacts = get_contacts()
     return render_template('contacts.html', contacts=all_contacts)
 
 @app.route('/contacts/add', methods=['POST'])
+@dashboard_required
+@dashboard_csrf_required
 def add_contact_route():
     from db import add_contact
     data = request.json
@@ -303,6 +494,8 @@ def add_contact_route():
     return jsonify({'success': True})
 
 @app.route('/contacts/delete', methods=['POST'])
+@dashboard_required
+@dashboard_csrf_required
 def delete_contact():
     data = request.json
     supabase.table('contacts').delete().eq('id', data['id']).execute()

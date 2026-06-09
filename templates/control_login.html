@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>JoeBot Control Login</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='control.css') }}">
+</head>
+<body class="login-body">
+  <main class="login-shell">
+    <section class="login-card">
+      <div class="logo-mark">J</div>
+      <p class="eyebrow">Private operations console</p>
+      <h1>JOE<span>BOT</span></h1>
+      <p class="muted">
+        {% if setup_mode %}
+        Create the administrator password for this local JoeBot dashboard.
+        {% else %}
+        Sign in to control the WhatsApp account, commands, chats, and automation.
+        {% endif %}
+      </p>
+
+      <form method="post">
+        <label for="password">{% if setup_mode %}Create admin password{% else %}Admin password{% endif %}</label>
+        <input id="password" name="password" type="password" minlength="12" autocomplete="{% if setup_mode %}new-password{% else %}current-password{% endif %}" required autofocus>
+        <button class="button primary full" type="submit">{% if setup_mode %}Create dashboard{% else %}Open dashboard{% endif %}</button>
+      </form>
+
+      {% if error %}<p class="form-error">{{ error }}</p>{% endif %}
+    </section>
+  </main>
+</body>
+</html>

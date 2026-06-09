@@ -49,6 +49,9 @@
   .toast.success { background: var(--accent); color: #000; }
   .toast.error { background: var(--danger); color: #fff; }
   .section { margin-bottom: 3rem; }
+  .nav { display: flex; gap: 0.8rem; margin: 1.2rem 0 2rem; flex-wrap: wrap; }
+  .nav a { font-family: 'Space Mono', monospace; font-size: 0.7rem; color: var(--muted); text-decoration: none; padding: 0.4rem 0.8rem; border: 1px solid var(--border); }
+  .nav a:hover { color: var(--text); border-color: var(--text); }
 </style>
 </head>
 <body>
@@ -57,6 +60,12 @@
     <div class="tag">Draft Review Console</div>
     <h1>JOE<span>BOT</span></h1>
   </header>
+
+  <nav class="nav">
+    <a href="/control">⚙ Control</a>
+    <a href="/wa-reviews">💬 WhatsApp Drafts</a>
+    <a href="/contacts">👥 Contacts</a>
+  </nav>
 
   <div class="stats">
     <div class="stat">
@@ -135,6 +144,8 @@
 <div class="toast" id="toast"></div>
 
 <script>
+  const dashboardCsrf = {{ session.dashboard_csrf|tojson }};
+
   function showToast(msg, type) {
     const t = document.getElementById('toast');
     t.textContent = msg;
@@ -151,7 +162,7 @@
     try {
       const res = await fetch('/approve', {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: {'Content-Type': 'application/json', 'X-CSRF-Token': dashboardCsrf},
         body: JSON.stringify({ id, draft, to, subject })
       });
       const data = await res.json();
@@ -173,7 +184,7 @@
   async function skip(id, index) {
     await fetch('/skip', {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      headers: {'Content-Type': 'application/json', 'X-CSRF-Token': dashboardCsrf},
       body: JSON.stringify({ id })
     });
     document.getElementById(`card-${index}`).remove();

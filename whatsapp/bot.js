@@ -3,6 +3,7 @@ const {
     useMultiFileAuthState,
     DisconnectReason,
     downloadMediaMessage,
+    normalizeMessageContent,
     getBinaryNodeChild,
     jidNormalizedUser,
     S_WHATSAPP_NET
@@ -10,16 +11,21 @@ const {
 const qrcode = require('qrcode-terminal')
 const fs = require('fs')
 const path = require('path')
+require('dotenv').config({ path: path.join(__dirname, '.env'), quiet: true })
 const http = require('http')
 const https = require('https')
 const { exec, execFile } = require('child_process')
 const { promisify } = require('util')
+const { ActivityLog, RuntimeSettings } = require('./control-state')
 const execAsync = promisify(exec)
 const execFileAsync = promisify(execFile)
 
 const AUTH_DIR = path.join(__dirname, 'auth_info')
+const DATA_DIR = path.join(__dirname, 'data')
 const RESET_AUTH = process.argv.includes('--reset-auth')
 const YTDLP_PATH = process.env.YTDLP_PATH || '/usr/local/bin/yt-dlp'
+const YTDLP_COOKIES_PATH = process.env.YTDLP_COOKIES_PATH || path.join(__dirname, 'cookies.txt')
+const YTDLP_PROXY_URL = process.env.YTDLP_PROXY_URL || ''
 const MAX_DOWNLOAD_SIZE_MB = Number(process.env.WA_MAX_DOWNLOAD_MB || 50)
 const MAX_DOWNLOAD_SIZE_BYTES = MAX_DOWNLOAD_SIZE_MB * 1024 * 1024
 const VIDEO_FORMATS = [
@@ -28,6 +34,8 @@ const VIDEO_FORMATS = [
     'bv*+ba/best'
 ]
 let didResetAuth = false
+const runtimeSettings = new RuntimeSettings(path.join(DATA_DIR, 'runtime-settings.json'))
+const activityLog = new ActivityLog(path.join(DATA_DIR, 'activity.jsonl'))
 
 function resetAuthSession(reason) {
     if (fs.existsSync(AUTH_DIR)) {
@@ -36,7 +44,7 @@ function resetAuthSession(reason) {
     console.log(`Reset WhatsApp auth session (${reason}): ${AUTH_DIR}`)
 }
 
-const OWNER_NUMBER = '254786998674'
+const OWNER_NUMBER = '254785998674'
 const OWNER_LID = '259957761028204@lid'
 const OWNER_JID = `${OWNER_NUMBER}@s.whatsapp.net`
 const OWNER_NUMBER_DIGITS = OWNER_NUMBER.replace(/\D/g, '')
@@ -131,8 +139,26 @@ function extractDownloadedPath(stdout) {
     return stdout.trim().split('\n').map(line => line.trim()).filter(Boolean).pop()
 }
 
+function getYtDlpCookieArgs() {
+    return fs.existsSync(YTDLP_COOKIES_PATH) ? ['--cookies', YTDLP_COOKIES_PATH] : []
+}
+
+function getYtDlpProxyArgs() {
+    return YTDLP_PROXY_URL ? ['--proxy', YTDLP_PROXY_URL] : []
+}
+
+function getYtDlpRuntimeArgs() {
+    return ['--js-runtimes', 'node']
+}
+
 function buildDownloadErrorMessage(err, url) {
     const details = `${err.stderr || err.stdout || err.message || ''}`
+    if (/proxy|407 Proxy Authentication Required|tunnel connection failed|connection.*proxy/i.test(details)) {
+        return 'Proxy connection failed. Check YTDLP_PROXY_URL credentials, host, and port.'
+    }
+    if (/Sign in to confirm.*not a bot|not a bot|Use --cookies|cookies-from-browser/i.test(details)) {
+        return 'YouTube is blocking downloads from the AWS server as automated traffic. Add a YouTube cookies.txt file on the server and set YTDLP_COOKIES_PATH, then try again.'
+    }
     if (url.includes('instagram.com') && /login|private|cookies|not available|Requested format/i.test(details)) {
         return 'Instagram could not provide a downloadable public video for this link. The reel may need login/cookies, be private, or be restricted.'
     }
@@ -141,6 +167,23 @@ function buildDownloadErrorMessage(err, url) {
     }
     if (/Requested format is not available/i.test(details)) {
         return 'No compatible video format was available for this link.'
+    }
+    return err.message.split('\n')[0]
+}
+
+function buildSongDownloadErrorMessage(err) {
+    const details = `${err.stderr || err.stdout || err.message || ''}`
+    if (/proxy|407 Proxy Authentication Required|tunnel connection failed|connection.*proxy/i.test(details)) {
+        return 'Proxy connection failed. Check the Decodo proxy credentials, host, and port.'
+    }
+    if (/Sign in to confirm.*not a bot|not a bot|Use --cookies|cookies-from-browser/i.test(details)) {
+        return 'YouTube is still blocking the server. The proxy may be missing, blocked, or not being used.'
+    }
+    if (/No video results|did not match any documents|Unable to extract/i.test(details)) {
+        return 'I could not find a downloadable YouTube result for that song.'
+    }
+    if (/ffmpeg|ffprobe/i.test(details)) {
+        return 'Audio conversion failed because ffmpeg is missing or failed on the server.'
     }
     return err.message.split('\n')[0]
 }
@@ -289,6 +332,9 @@ async function downloadVideoWithYtDlp(url, outputTemplate) {
                 '--recode-video', 'mp4',
                 '--output', outputTemplate,
                 '--print', 'after_move:filepath',
+                ...getYtDlpRuntimeArgs(),
+                ...getYtDlpProxyArgs(),
+                ...getYtDlpCookieArgs(),
                 url
             ], { timeout: 120000, maxBuffer: 1024 * 1024 })
 
@@ -318,14 +364,321 @@ async function downloadVideoWithYtDlp(url, outputTemplate) {
 }
 
 let activeSock = null
-const messageStore = {}
+let desiredRunning = RESET_AUTH || runtimeSettings.snapshot().botEnabled
+let connectionState = 'stopped'
+let lastConnectedAt = null
+let lastConnectionError = null
+let qrPending = false
+let connectionGeneration = 0
+let reconnectTimer = null
+const messageStore = new Map()
+const MESSAGE_TTL = Number(process.env.WA_MESSAGE_TTL_MS || 24 * 60 * 60 * 1000)
+const ANTI_DELETE_CACHE_DIR = path.join(__dirname, 'anti_delete_cache')
+const ANTI_DELETE_MEDIA_MAX_MB = Number(process.env.WA_ANTI_DELETE_MEDIA_MAX_MB || 50)
+const ANTI_DELETE_MEDIA_MAX_BYTES = ANTI_DELETE_MEDIA_MAX_MB * 1024 * 1024
+
+function getMessageStoreKey(key = {}) {
+    return `${key.remoteJid || ''}:${key.participant || ''}:${key.fromMe ? '1' : '0'}:${key.id || ''}`
+}
+
+function getMessageStoreCandidateKeys(key = {}) {
+    const remoteJid = key.remoteJid || ''
+    const participant = key.participant || ''
+    const fromMe = key.fromMe ? '1' : '0'
+    const id = key.id || ''
+    return [
+        `${remoteJid}:${participant}:${fromMe}:${id}`,
+        `${remoteJid}:${participant}:0:${id}`,
+        `${remoteJid}:${participant}:1:${id}`,
+        `${remoteJid}::${fromMe}:${id}`,
+        `${remoteJid}::0:${id}`,
+        `${remoteJid}::1:${id}`
+    ]
+}
+
+function deleteCachedMedia(entry) {
+    const filePath = entry?.media?.filePath
+    if (!filePath) return
+    const resolved = path.resolve(filePath)
+    const cacheRoot = path.resolve(ANTI_DELETE_CACHE_DIR)
+    if (!resolved.startsWith(cacheRoot)) return
+    try {
+        if (fs.existsSync(resolved)) fs.unlinkSync(resolved)
+    } catch (err) {
+        console.error('Cached media cleanup error:', err.message)
+    }
+}
+
+function cleanupMessageStore() {
+    const now = Date.now()
+    for (const [key, entry] of messageStore.entries()) {
+        if (now - entry.storedAt > MESSAGE_TTL) {
+            deleteCachedMedia(entry)
+            messageStore.delete(key)
+        }
+    }
+    console.log(`MessageStore cleanup: ${messageStore.size} messages in cache`)
+}
+
+const cleanupTimer = setInterval(cleanupMessageStore, 60 * 60 * 1000)
+if (typeof cleanupTimer.unref === 'function') cleanupTimer.unref()
+
+function storeMessage(msg) {
+    const key = getMessageStoreKey(msg.key)
+    const entry = {
+        key,
+        msg,
+        sender: msg.key.remoteJid,
+        participant: msg.key.participant,
+        message: msg.message,
+        timestamp: Number(msg.messageTimestamp || Math.floor(Date.now() / 1000)),
+        storedAt: Date.now(),
+        pushName: msg.pushName || 'Unknown',
+        media: null,
+        mediaError: null,
+        deletedNotified: false
+    }
+    const oldEntry = messageStore.get(key)
+    if (oldEntry?.media?.filePath && oldEntry.media.filePath !== entry.media?.filePath) {
+        deleteCachedMedia(oldEntry)
+    }
+    messageStore.set(key, entry)
+    return entry
+}
+
+function getStoredEntryByKey(key = {}) {
+    for (const candidate of getMessageStoreCandidateKeys(key)) {
+        const entry = messageStore.get(candidate)
+        if (!entry) continue
+        if (Date.now() - entry.storedAt > MESSAGE_TTL) {
+            deleteCachedMedia(entry)
+            messageStore.delete(candidate)
+            return null
+        }
+        return entry
+    }
+
+    const remoteJid = key.remoteJid || ''
+    const participant = key.participant || ''
+    const id = key.id || ''
+    if (!remoteJid || !id) return null
+
+    let matched = null
+    for (const entry of messageStore.values()) {
+        // Match by ID only as last resort; delete events can arrive with LID JIDs
+        // while the original message was stored under a phone-number JID.
+        if (entry.msg.key.id !== id) continue
+        if (!matched || entry.timestamp > matched.timestamp) matched = entry
+    }
+    if (matched && Date.now() - matched.storedAt > MESSAGE_TTL) {
+        deleteCachedMedia(matched)
+        messageStore.delete(matched.key)
+        return null
+    }
+    return matched
+}
+
+function getStoredMessageContent(key = {}) {
+    return getStoredEntryByKey(key)?.message
+}
+
+function getLatestStoredEntryBySender(sender) {
+    let latest = null
+    for (const entry of messageStore.values()) {
+        if (entry.sender !== sender) continue
+        if (!latest || entry.timestamp > latest.timestamp) latest = entry
+    }
+    return latest
+}
+
+function getRecentChats(limit = 80) {
+    const chats = new Map()
+    for (const entry of messageStore.values()) {
+        const jid = entry.sender
+        if (!jid || jid === 'status@broadcast') continue
+        const current = chats.get(jid)
+        if (current && current.timestamp >= entry.timestamp) continue
+        chats.set(jid, {
+            jid,
+            name: entry.pushName || jid,
+            participant: entry.participant || null,
+            timestamp: entry.timestamp,
+            preview: extractTextFromMessage(entry.message).slice(0, 180),
+            type: Object.keys(unwrapMessageContent(entry.message) || {})[0] || 'unknown',
+            fromMe: Boolean(entry.msg.key.fromMe)
+        })
+    }
+    return Array.from(chats.values())
+        .sort((a, b) => b.timestamp - a.timestamp)
+        .slice(0, Math.min(Math.max(Number(limit) || 80, 1), 200))
+}
+
+function getRecentMessages(jid, limit = 100) {
+    return Array.from(messageStore.values())
+        .filter(entry => entry.sender === jid)
+        .sort((a, b) => a.timestamp - b.timestamp)
+        .slice(-Math.min(Math.max(Number(limit) || 100, 1), 200))
+        .map(entry => ({
+            id: entry.msg.key.id,
+            jid: entry.sender,
+            participant: entry.participant || null,
+            name: entry.pushName || entry.sender,
+            timestamp: entry.timestamp,
+            text: extractTextFromMessage(entry.message).slice(0, 4000),
+            type: Object.keys(unwrapMessageContent(entry.message) || {})[0] || 'unknown',
+            fromMe: Boolean(entry.msg.key.fromMe),
+            hasMedia: Boolean(getMediaInfo(entry.message))
+        }))
+}
 
 function unwrapMessageContent(message) {
-    return message?.ephemeralMessage?.message ||
+    return normalizeMessageContent(message) ||
+           message?.ephemeralMessage?.message ||
            message?.viewOnceMessage?.message ||
            message?.viewOnceMessageV2?.message ||
            message?.viewOnceMessageV2Extension?.message ||
+           message?.documentWithCaptionMessage?.message ||
+           message?.buttonsMessage ||
            message
+}
+
+function getExtensionFromMedia(fileName, mimetype, fallback) {
+    const ext = path.extname(fileName || '').replace('.', '').replace(/[^a-zA-Z0-9]/g, '')
+    if (ext) return ext
+    if (mimetype?.includes('pdf')) return 'pdf'
+    if (mimetype?.includes('wordprocessingml')) return 'docx'
+    if (mimetype?.includes('spreadsheetml')) return 'xlsx'
+    if (mimetype?.includes('presentationml')) return 'pptx'
+    if (mimetype?.includes('zip')) return 'zip'
+    return fallback
+}
+
+function getViewOnceMessageContent(message) {
+    const actual = message?.ephemeralMessage?.message ||
+                   message?.documentWithCaptionMessage?.message ||
+                   message
+    return actual?.viewOnceMessage?.message ||
+           actual?.viewOnceMessageV2?.message ||
+           actual?.viewOnceMessageV2Extension?.message ||
+           actual?.ephemeralMessage?.message?.viewOnceMessage?.message ||
+           actual?.ephemeralMessage?.message?.viewOnceMessageV2?.message ||
+           actual?.ephemeralMessage?.message?.viewOnceMessageV2Extension?.message ||
+           null
+}
+
+function getMediaInfo(message) {
+    const actual = unwrapMessageContent(message)
+    if (actual?.imageMessage) {
+        const mimetype = actual.imageMessage.mimetype || 'image/jpeg'
+        return { kind: 'image', mimetype, extension: mimetype.includes('png') ? 'png' : 'jpg' }
+    }
+    if (actual?.videoMessage) {
+        return { kind: 'video', mimetype: actual.videoMessage.mimetype || 'video/mp4', extension: 'mp4' }
+    }
+    if (actual?.audioMessage) {
+        const mimetype = actual.audioMessage.mimetype || 'audio/ogg; codecs=opus'
+        return { kind: 'audio', mimetype, extension: mimetype.includes('mpeg') ? 'mp3' : 'ogg' }
+    }
+    if (actual?.documentMessage) {
+        const mimetype = actual.documentMessage.mimetype || 'application/octet-stream'
+        const fileName = actual.documentMessage.fileName || ''
+        return {
+            kind: 'document',
+            mimetype,
+            fileName,
+            extension: getExtensionFromMedia(fileName, mimetype, 'bin')
+        }
+    }
+    return null
+}
+
+async function downloadMessageBuffer(sock, msg) {
+    return downloadMediaMessage(msg, 'buffer', {}, {
+        logger: console,
+        reuploadRequest: async (...args) => sock.updateMediaMessage(...args)
+    })
+}
+
+async function cacheMessageMedia(sock, entry) {
+    const mediaInfo = getMediaInfo(entry.message)
+    if (!mediaInfo) return
+
+    try {
+        const buffer = await downloadMessageBuffer(sock, entry.msg)
+        if (buffer.length > ANTI_DELETE_MEDIA_MAX_BYTES) {
+            entry.mediaError = `media is larger than ${ANTI_DELETE_MEDIA_MAX_MB}MB`
+            return
+        }
+
+        fs.mkdirSync(ANTI_DELETE_CACHE_DIR, { recursive: true })
+        const safeId = (entry.msg.key.id || `${Date.now()}`).replace(/[^a-zA-Z0-9_-]/g, '')
+        const filePath = path.join(ANTI_DELETE_CACHE_DIR, `${Date.now()}_${safeId}.${mediaInfo.extension}`)
+        fs.writeFileSync(filePath, buffer)
+        entry.media = { ...mediaInfo, filePath }
+        entry.mediaError = null
+    } catch (err) {
+        entry.mediaError = err.message
+        console.error('Anti-delete media cache error:', err.message)
+    }
+}
+
+async function sendDeletedMessageAlert(sock, entry, fallbackName = 'Unknown') {
+    if (!entry) {
+        console.log('ANTI-DELETE alert skipped: no stored entry')
+        return
+    }
+    if (entry.deletedNotified) {
+        console.log('ANTI-DELETE alert skipped: already notified', entry.key)
+        return
+    }
+    entry.deletedNotified = true
+
+    const senderName = entry.pushName || fallbackName
+    const alertText = `🗑️ *Deleted Message Alert*\n*From:* ${senderName}\n*Time:* ${new Date(entry.timestamp * 1000).toLocaleString('en-KE', { timeZone: 'Africa/Nairobi' })}\n\n`
+    const actualMsg = unwrapMessageContent(entry.message)
+    const text = extractTextFromMessage(entry.message)
+    console.log('ANTI-DELETE alert sending:', entry.key, '| text:', text.slice(0, 80) || '(no text)', '| types:', Object.keys(actualMsg || {}).join(',') || 'unknown')
+
+    if (text) {
+        await sock.sendMessage(OWNER_JID, { text: alertText + `*Message:* ${text}` })
+        console.log('ANTI-DELETE alert sent: text')
+        return
+    }
+
+    const mediaInfo = getMediaInfo(entry.message)
+    if (mediaInfo && entry.media?.filePath && fs.existsSync(entry.media.filePath)) {
+        const buffer = fs.readFileSync(entry.media.filePath)
+        if (mediaInfo.kind === 'image') {
+            await sock.sendMessage(OWNER_JID, { text: alertText + '*Type:* Image' })
+            await sock.sendMessage(OWNER_JID, { image: buffer, caption: '(deleted image)' })
+        } else if (mediaInfo.kind === 'video') {
+            await sock.sendMessage(OWNER_JID, { text: alertText + '*Type:* Video' })
+            await sock.sendMessage(OWNER_JID, { video: buffer, caption: '(deleted video)' })
+        } else if (mediaInfo.kind === 'audio') {
+            await sock.sendMessage(OWNER_JID, { text: alertText + '*Type:* Voice note' })
+            await sock.sendMessage(OWNER_JID, { audio: buffer, mimetype: mediaInfo.mimetype, ptt: true })
+        } else if (mediaInfo.kind === 'document') {
+            await sock.sendMessage(OWNER_JID, { text: alertText + '*Type:* Document' })
+            await sock.sendMessage(OWNER_JID, {
+                document: buffer,
+                mimetype: mediaInfo.mimetype,
+                fileName: mediaInfo.fileName || `deleted_document.${mediaInfo.extension}`
+            })
+        }
+        console.log('ANTI-DELETE alert sent:', mediaInfo.kind)
+        return
+    }
+
+    if (mediaInfo) {
+        await sock.sendMessage(OWNER_JID, {
+            text: alertText + `*Type:* ${mediaInfo.kind} (not cached${entry.mediaError ? `: ${entry.mediaError}` : ''})`
+        })
+        console.log('ANTI-DELETE alert sent: media not cached', mediaInfo.kind)
+        return
+    }
+
+    await sock.sendMessage(OWNER_JID, { text: alertText + `*Type:* ${Object.keys(actualMsg || {}).join(', ') || 'unknown'}` })
+    console.log('ANTI-DELETE alert sent: unknown type')
 }
 
 function extractTextFromMessage(message) {
@@ -358,6 +711,14 @@ async function handleCommand(sock, sender, text) {
     const command = parts[0].toLowerCase()
     const arg = parts.slice(1).join(' ').trim()
     console.log(`Command: ${command} | Arg: ${arg}`)
+
+    if (!runtimeSettings.isCommandEnabled(command)) {
+        activityLog.add('command_disabled', { command, sender })
+        await sock.sendMessage(sender, { text: `⛔ ${command} is disabled in the JoeBot control dashboard.` })
+        return
+    }
+
+    activityLog.add('command', { command, sender })
 
     switch (command) {
 
@@ -506,6 +867,9 @@ async function handleCommand(sock, sender, text) {
                     '--audio-format', 'mp3',
                     '--output', path.join(dlDir2, '%(title)s.%(ext)s'),
                     '--print', 'after_move:filepath',
+                    ...getYtDlpRuntimeArgs(),
+                    ...getYtDlpProxyArgs(),
+                    ...getYtDlpCookieArgs(),
                     arg
                 ], { timeout: 120000, maxBuffer: 1024 * 1024 })
                 const filePath = stdout.trim().split('\n').pop()
@@ -513,7 +877,8 @@ async function handleCommand(sock, sender, text) {
                 await sock.sendMessage(sender, { audio: fs.readFileSync(filePath), mimetype: 'audio/mp4', ptt: false })
                 fs.unlinkSync(filePath)
             } catch (err) {
-                await sock.sendMessage(sender, { text: `❌ Audio failed: ${err.message.split('\n')[0]}` })
+                if (err.stderr) console.log('yt-dlp mp3 stderr:', err.stderr.slice(0, 800))
+                await sock.sendMessage(sender, { text: `❌ Audio failed: ${buildSongDownloadErrorMessage(err)}` })
             }
             break
         }
@@ -536,6 +901,9 @@ async function handleCommand(sock, sender, text) {
                     '--audio-quality', '0',
                     '--output', outTpl,
                     '--print', 'after_move:filepath',
+                    ...getYtDlpRuntimeArgs(),
+                    ...getYtDlpProxyArgs(),
+                    ...getYtDlpCookieArgs(),
                     searchArg
                 ], { timeout: 120000, maxBuffer: 1024 * 1024 })
                 const filePath = stdout.trim().split('\n').pop()
@@ -556,7 +924,8 @@ async function handleCommand(sock, sender, text) {
                 console.log(`✓ Song sent: ${songTitle}`)
             } catch (err) {
                 console.error('Song download error:', err.message)
-                await sock.sendMessage(sender, { text: `❌ Download failed: ${err.message.split('\n')[0]}` })
+                if (err.stderr) console.log('yt-dlp song stderr:', err.stderr.slice(0, 800))
+                await sock.sendMessage(sender, { text: `❌ Download failed: ${buildSongDownloadErrorMessage(err)}` })
             }
             break
         }
@@ -771,7 +1140,7 @@ async function handleCommand(sock, sender, text) {
             }
             const targetNum = arg.replace(/\+/g, '')
             const targetJid = `${targetNum}@s.whatsapp.net`
-            const stored = Object.values(messageStore).filter(m => m.sender === targetJid).pop()
+            const stored = getLatestStoredEntryBySender(targetJid)
             if (!stored) {
                 await sock.sendMessage(sender, { text: `❌ No stored messages from ${targetNum}. Messages are stored as they arrive.` })
             } else {
@@ -1141,40 +1510,133 @@ async function handleCommand(sock, sender, text) {
     }
 }
 
+function scheduleReconnect() {
+    if (!desiredRunning || reconnectTimer) return
+    reconnectTimer = setTimeout(() => {
+        reconnectTimer = null
+        connectToWhatsApp().catch(err => {
+            connectionState = 'error'
+            lastConnectionError = err.message
+            activityLog.add('connection', { status: 'error', error: err.message })
+            console.error('Reconnect error:', err.message)
+            scheduleReconnect()
+        })
+    }, 3000)
+    if (typeof reconnectTimer.unref === 'function') reconnectTimer.unref()
+}
+
+async function startWhatsApp() {
+    desiredRunning = true
+    runtimeSettings.setBotEnabled(true)
+    if (reconnectTimer) {
+        clearTimeout(reconnectTimer)
+        reconnectTimer = null
+    }
+    try {
+        await connectToWhatsApp()
+    } catch (err) {
+        connectionState = 'error'
+        lastConnectionError = err.message
+        activityLog.add('connection', { status: 'error', error: err.message })
+        scheduleReconnect()
+        throw err
+    }
+}
+
+async function stopWhatsApp() {
+    desiredRunning = false
+    runtimeSettings.setBotEnabled(false)
+    if (reconnectTimer) {
+        clearTimeout(reconnectTimer)
+        reconnectTimer = null
+    }
+    const sock = activeSock
+    activeSock = null
+    connectionState = 'stopped'
+    qrPending = false
+    connectionGeneration += 1
+    activityLog.add('connection', { status: 'stopped' })
+    if (sock) {
+        try {
+            sock.end(new Error('Stopped from JoeBot dashboard'))
+        } catch (err) {
+            console.error('Socket stop error:', err.message)
+        }
+    }
+}
+
+function getRuntimeState() {
+    return {
+        desiredRunning,
+        connection: connectionState,
+        connected: connectionState === 'connected',
+        account: activeSock?.user?.id || null,
+        lastConnectedAt,
+        lastError: lastConnectionError,
+        qrPending,
+        messagesInMemory: messageStore.size,
+        settings: runtimeSettings.snapshot()
+    }
+}
+
 async function connectToWhatsApp() {
+    if (!desiredRunning || connectionState === 'connecting' || connectionState === 'connected') return
+
     if (RESET_AUTH && !didResetAuth) {
         resetAuthSession('--reset-auth')
         didResetAuth = true
     }
 
+    connectionState = 'connecting'
+    lastConnectionError = null
+    const generation = ++connectionGeneration
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR)
 
     const sock = makeWASocket({
         auth: state,
         printQRInTerminal: false,
         shouldIgnoreJid: jid => false,
-        getMessage: async () => ({ conversation: '' })
+        getMessage: async (key) => getStoredMessageContent(key)
     })
 
     activeSock = sock
 
     sock.ev.on('connection.update', (update) => {
+        if (generation !== connectionGeneration) return
         const { connection, lastDisconnect, qr } = update
-        if (qr) { console.log('\nScan QR code:\n'); qrcode.generate(qr, { small: true }) }
+        if (qr) {
+            qrPending = true
+            connectionState = 'awaiting_scan'
+            activityLog.add('connection', { status: 'awaiting_scan' })
+            console.log('\nScan QR code:\n')
+            qrcode.generate(qr, { small: true })
+        }
         if (connection === 'close') {
             const statusCode = lastDisconnect?.error?.output?.statusCode
             const errorMessage = lastDisconnect?.error?.message || 'Unknown disconnect'
             const wasLoggedOut = statusCode === DisconnectReason.loggedOut
             const shouldReconnect = !wasLoggedOut
+            activeSock = null
+            qrPending = false
+            lastConnectionError = errorMessage
+            connectionState = wasLoggedOut ? 'logged_out' : (desiredRunning ? 'reconnecting' : 'stopped')
+            activityLog.add('connection', {
+                status: connectionState,
+                statusCode: statusCode || null,
+                error: errorMessage
+            })
             console.log(`Connection closed: ${errorMessage} (status: ${statusCode || 'unknown'}). Reconnecting: ${shouldReconnect}`)
             if (wasLoggedOut) {
-                resetAuthSession('WhatsApp rejected saved session')
-                console.log('Starting fresh WhatsApp link. Scan the QR code when it appears.')
-                setTimeout(connectToWhatsApp, 2000)
-            } else if (shouldReconnect) {
-                setTimeout(connectToWhatsApp, 2000)
+                console.log('WhatsApp logged out. Run npm run relink when you intentionally want to reset and scan again.')
+            } else if (desiredRunning && shouldReconnect) {
+                scheduleReconnect()
             }
         } else if (connection === 'open') {
+            connectionState = 'connected'
+            lastConnectedAt = new Date().toISOString()
+            lastConnectionError = null
+            qrPending = false
+            activityLog.add('connection', { status: 'connected', account: sock.user?.id || null })
             console.log('✓ WhatsApp bot is live and listening...')
         }
     })
@@ -1191,22 +1653,22 @@ async function connectToWhatsApp() {
 
     // Keep the original delete event as backup
     sock.ev.on('messages.delete', async (item) => {
+        if (!runtimeSettings.isFeatureEnabled('antiDelete')) return
+        console.log('DELETE EVENT:', JSON.stringify(item).slice(0, 200))
         if (!('keys' in item)) return
         for (const key of item.keys) {
-            const stored = messageStore[key.id]
+            const stored = getStoredEntryByKey(key)
             if (!stored) continue
-            const text = stored.message?.conversation || stored.message?.extendedTextMessage?.text
-            if (text) {
-                await sock.sendMessage(OWNER_JID, {
-                    text: `🗑️ *Deleted Message*\n*From:* ${stored.pushName}\n\n*Message:* ${text}`
-                })
-                delete messageStore[key.id]
-            }
+            await sendDeletedMessageAlert(sock, stored)
         }
     })
 
     // SINGLE UNIFIED messages.upsert listener
-    sock.ev.on('messages.upsert', async ({ messages }) => {
+    sock.ev.on('messages.upsert', async ({ messages, type }) => {
+        console.log('UPSERT type:', type, '| count:', messages.length)
+        for (const m of messages) {
+            console.log('RAW MSG TYPES:', Object.keys(m.message || {}).join(','), '| fromMe:', m.key.fromMe, '| full:', JSON.stringify(m).slice(0, 300))
+        }
         for (const msg of messages) {
             if (!msg.message) continue
 
@@ -1214,13 +1676,7 @@ async function connectToWhatsApp() {
             const msgAge = Date.now() / 1000 - (msg.messageTimestamp || 0)
             if (msgAge > 300) {
                 // Still store for anti-delete but skip processing
-                messageStore[msg.key.id] = {
-                    sender: msg.key.remoteJid,
-                    participant: msg.key.participant,
-                    message: msg.message,
-                    timestamp: msg.messageTimestamp,
-                    pushName: msg.pushName || 'Unknown'
-                }
+                storeMessage(msg)
                 continue
             }
 
@@ -1229,6 +1685,7 @@ async function connectToWhatsApp() {
             const senderNumber = normalizeNumberFromJid(actorJid)
             const text = extractTextFromMessage(msg.message)
             const msgType = Object.keys(msg.message || {})[0] || ''
+            console.log('MSG TYPES:', Object.keys(msg.message || {}).join(','), '| from:', msg.key.remoteJid)
             const isCommand = text.startsWith('/')
             const isOwner = isOwnerActor(actorJid)
             const isGroup = sender.endsWith('@g.us')
@@ -1239,17 +1696,30 @@ async function connectToWhatsApp() {
                 continue
             }
 
+            if (isCommand && isOwner) {
+                const requestedCommand = text.trim().split(/\s+/)[0].toLowerCase()
+                if (!runtimeSettings.isCommandEnabled(requestedCommand)) {
+                    activityLog.add('command_disabled', { command: requestedCommand, sender })
+                    await sock.sendMessage(sender, { text: `⛔ ${requestedCommand} is disabled in the JoeBot control dashboard.` })
+                    continue
+                }
+            }
+
             // --- STORE ALL MESSAGES FOR ANTI-DELETE ---
-            messageStore[msg.key.id] = {
-                sender,
-                participant: msg.key.participant,
-                message: msg.message,
-                timestamp: msg.messageTimestamp,
-                pushName: msg.pushName || 'Unknown'
+            const storedEntry = storeMessage(msg)
+            activityLog.add('message_received', {
+                jid: sender,
+                name: msg.pushName || null,
+                type: msgType,
+                fromMe: Boolean(msg.key.fromMe)
+            })
+            if (runtimeSettings.isFeatureEnabled('antiDelete') || runtimeSettings.isFeatureEnabled('viewOnce')) {
+                await cacheMessageMedia(sock, storedEntry)
             }
 
             // --- STATUS AUTO-SAVE ---
             if (isStatus) {
+                if (!runtimeSettings.isFeatureEnabled('statusSaver')) continue
                 const posterJid = msg.key.participant || sender
                 const posterNumber = posterJid.replace('@s.whatsapp.net', '')
                 const statusDir = path.join(__dirname, 'saved_statuses', posterNumber)
@@ -1276,64 +1746,42 @@ async function connectToWhatsApp() {
 
             // --- ANTI-DELETE: catch protocol delete messages ---
             const proto = msg.message?.protocolMessage
-            if (proto && proto.type === 0) {
+            if (proto) console.log('PROTOCOL MSG type:', proto.type, '| key:', JSON.stringify(proto.key).slice(0, 100))
+            if (runtimeSettings.isFeatureEnabled('antiDelete') && proto && proto.type === 0) {
                 const deletedKey = proto.key
-                const stored = messageStore[deletedKey?.id]
+                const stored = getStoredEntryByKey(deletedKey)
+                console.log('ANTI-DELETE lookup:', stored ? `found ${stored.key}` : 'missing', '| deleted id:', deletedKey?.id)
                 if (!stored) {
                     await sock.sendMessage(OWNER_JID, {
                         text: `🗑️ *Deleted Message Alert*\n*From:* ${msg.pushName || 'Unknown'}\n*Time:* ${new Date().toLocaleString('en-KE', { timeZone: 'Africa/Nairobi' })}\n\n⚠️ Deleted before it was stored.`
                     })
+                    console.log('ANTI-DELETE alert sent: missing stored entry')
                     continue
                 }
-                const senderName = stored.pushName
-                const alertText = `🗑️ *Deleted Message Alert*\n*From:* ${senderName}\n*Time:* ${new Date(stored.timestamp * 1000).toLocaleString('en-KE', { timeZone: 'Africa/Nairobi' })}\n\n`
-                const actualMsg = stored.message?.ephemeralMessage?.message || stored.message?.viewOnceMessage?.message || stored.message
                 try {
-                    if (actualMsg.conversation || actualMsg.extendedTextMessage) {
-                        const text2 = actualMsg.conversation || actualMsg.extendedTextMessage?.text
-                        await sock.sendMessage(OWNER_JID, { text: alertText + `*Message:* ${text2}` })
-                    } else if (actualMsg.imageMessage) {
-                        try {
-                            const buffer = await downloadMediaMessage({ message: actualMsg, key: deletedKey }, 'buffer', {})
-                            await sock.sendMessage(OWNER_JID, { text: alertText + `*Type:* Image` })
-                            await sock.sendMessage(OWNER_JID, { image: buffer, caption: '(deleted image)' })
-                        } catch { await sock.sendMessage(OWNER_JID, { text: alertText + `*Type:* Image (could not download)` }) }
-                    } else if (actualMsg.videoMessage) {
-                        try {
-                            const buffer = await downloadMediaMessage({ message: actualMsg, key: deletedKey }, 'buffer', {})
-                            await sock.sendMessage(OWNER_JID, { text: alertText + `*Type:* Video` })
-                            await sock.sendMessage(OWNER_JID, { video: buffer, caption: '(deleted video)' })
-                        } catch { await sock.sendMessage(OWNER_JID, { text: alertText + `*Type:* Video (could not download)` }) }
-                    } else if (actualMsg.audioMessage) {
-                        try {
-                            const buffer = await downloadMediaMessage({ message: actualMsg, key: deletedKey }, 'buffer', {})
-                            await sock.sendMessage(OWNER_JID, { text: alertText + `*Type:* Voice note` })
-                            await sock.sendMessage(OWNER_JID, { audio: buffer, mimetype: 'audio/ogg; codecs=opus', ptt: true })
-                        } catch { await sock.sendMessage(OWNER_JID, { text: alertText + `*Type:* Voice note (could not download)` }) }
-                    } else {
-                        await sock.sendMessage(OWNER_JID, { text: alertText + `*Type:* ${Object.keys(actualMsg).join(', ')}` })
-                    }
-                    delete messageStore[deletedKey.id]
+                    await sendDeletedMessageAlert(sock, stored, msg.pushName || 'Unknown')
                 } catch (err) { console.error('Anti-delete error:', err.message) }
                 continue
             }
 
             // --- VIEW-ONCE INTERCEPTOR ---
-            const viewOnceMsg = msg.message?.viewOnceMessage?.message ||
-                                msg.message?.viewOnceMessageV2?.message ||
-                                msg.message?.viewOnceMessageV2Extension?.message
-            if (viewOnceMsg) {
+            const viewOnceMsg = getViewOnceMessageContent(msg.message)
+            if (runtimeSettings.isFeatureEnabled('viewOnce') && viewOnceMsg) {
                 console.log(`👁️ View-once from ${msg.pushName || sender}`)
                 try {
                     if (viewOnceMsg.imageMessage) {
-                        const buffer = await downloadMediaMessage({ message: { imageMessage: viewOnceMsg.imageMessage }, key: msg.key }, 'buffer', {})
+                        const buffer = storedEntry.media?.filePath && fs.existsSync(storedEntry.media.filePath)
+                            ? fs.readFileSync(storedEntry.media.filePath)
+                            : await downloadMessageBuffer(sock, msg)
                         const savePath = path.join(__dirname, 'view_once', `${Date.now()}.jpg`)
                         fs.mkdirSync(path.join(__dirname, 'view_once'), { recursive: true })
                         fs.writeFileSync(savePath, buffer)
                         await sock.sendMessage(OWNER_JID, { text: `👁️ *View-Once Image*\n*From:* ${msg.pushName || sender}` })
                         await sock.sendMessage(OWNER_JID, { image: buffer, caption: '(view-once intercepted)' })
                     } else if (viewOnceMsg.videoMessage) {
-                        const buffer = await downloadMediaMessage({ message: { videoMessage: viewOnceMsg.videoMessage }, key: msg.key }, 'buffer', {})
+                        const buffer = storedEntry.media?.filePath && fs.existsSync(storedEntry.media.filePath)
+                            ? fs.readFileSync(storedEntry.media.filePath)
+                            : await downloadMessageBuffer(sock, msg)
                         const savePath = path.join(__dirname, 'view_once', `${Date.now()}.mp4`)
                         fs.mkdirSync(path.join(__dirname, 'view_once'), { recursive: true })
                         fs.writeFileSync(savePath, buffer)
@@ -1345,7 +1793,7 @@ async function connectToWhatsApp() {
             }
 
             // --- EXIF EXTRACTION ---
-            if (text?.trim().toLowerCase() === '/exif' && (msgType === 'imageMessage' || msgType === 'documentMessage')) {
+            if (runtimeSettings.isFeatureEnabled('mediaTools') && text?.trim().toLowerCase() === '/exif' && (msgType === 'imageMessage' || msgType === 'documentMessage')) {
                 await sock.sendMessage(sender, { text: '🔍 Extracting EXIF data...' })
                 try {
                     const buffer = await downloadMediaMessage(msg, 'buffer', {})
@@ -1405,7 +1853,7 @@ async function connectToWhatsApp() {
             }
 
             // --- VOICE NOTE TRANSCRIPTION ---
-            if (msg.message?.audioMessage?.ptt === true) {
+            if (runtimeSettings.isFeatureEnabled('voiceTranscription') && msg.message?.audioMessage?.ptt === true) {
                 console.log(`🎤 Voice note from ${sender}`)
                 try {
                     const buffer = await downloadMediaMessage(msg, 'buffer', {})
@@ -1422,7 +1870,7 @@ async function connectToWhatsApp() {
             }
 
             // --- VIDEO COMPRESSION ---
-            if (msg.message?.videoMessage) {
+            if (runtimeSettings.isFeatureEnabled('mediaTools') && msg.message?.videoMessage) {
                 const videoCaption = msg.message.videoMessage.caption || ''
                 if (videoCaption.trim().toLowerCase() === '/compress') {
                     console.log(`🎥 Video compression requested from ${sender}`)
@@ -1453,7 +1901,7 @@ async function connectToWhatsApp() {
             }
 
             // --- IMAGE RESIZE ---
-            if (msg.message?.imageMessage) {
+            if (runtimeSettings.isFeatureEnabled('mediaTools') && msg.message?.imageMessage) {
                 const resizeCaption = msg.message.imageMessage.caption || ''
                 if (resizeCaption.trim().toLowerCase() === '/resize') {
                     console.log(`🖼️ Image resize requested from ${sender}`)
@@ -1484,7 +1932,7 @@ async function connectToWhatsApp() {
             }
 
             // --- PDF SUMMARIZER ---
-            if (msg.message?.documentMessage) {
+            if (runtimeSettings.isFeatureEnabled('mediaTools') && msg.message?.documentMessage) {
                 const doc = msg.message.documentMessage
                 const isPDF = doc.mimetype === 'application/pdf' || doc.fileName?.endsWith('.pdf')
                 if (isPDF) {
@@ -1514,7 +1962,7 @@ async function connectToWhatsApp() {
             }
 
             // --- IMAGE ANALYSIS / STICKER ---
-            if (msgType === 'imageMessage' && (text?.startsWith('/analyze') || text?.startsWith('/describe') || text?.trim().toLowerCase() === '/sticker')) {
+            if (runtimeSettings.isFeatureEnabled('mediaTools') && msgType === 'imageMessage' && (text?.startsWith('/analyze') || text?.startsWith('/describe') || text?.trim().toLowerCase() === '/sticker')) {
                 console.log(`🖼️ Image from ${sender}`)
                 try {
                     const buffer = await downloadMediaMessage(msg, 'buffer', {})
@@ -1598,16 +2046,21 @@ async function connectToWhatsApp() {
             } catch (err) { console.error('Lock check error:', err.message) }
 
             // --- UNKNOWN NUMBER ALERT ---
-            try {
-                const contactCheck = await callFlaskPost('/contact-lock', { phone: senderNumber, action: 'check_contact' })
-                if (!contactCheck.known) {
-                    await sock.sendMessage(OWNER_JID, {
-                        text: `👤 *Unknown Number*\n*Number:* ${senderNumber}\n*Message:* ${text}\n*Time:* ${new Date().toLocaleString('en-KE', { timeZone: 'Africa/Nairobi' })}\n\n/lock ${senderNumber} to ignore.`
-                    })
-                }
-            } catch (err) { console.error('Contact check error:', err.message) }
+            // Disabled: this was too noisy for normal bot usage.
+            // try {
+            //     const contactCheck = await callFlaskPost('/contact-lock', { phone: senderNumber, action: 'check_contact' })
+            //     if (!contactCheck.known) {
+            //         await sock.sendMessage(OWNER_JID, {
+            //             text: `👤 *Unknown Number*\n*Number:* ${senderNumber}\n*Message:* ${text}\n*Time:* ${new Date().toLocaleString('en-KE', { timeZone: 'Africa/Nairobi' })}\n\n/lock ${senderNumber} to ignore.`
+            //         })
+            //     }
+            // } catch (err) { console.error('Contact check error:', err.message) }
 
             // --- NORMAL AI FLOW ---
+            if (!runtimeSettings.isFeatureEnabled('aiReplies')) {
+                activityLog.add('ai_reply_skipped', { jid: sender, reason: 'disabled' })
+                continue
+            }
             console.log('Calling Flask...')
             try {
                 const response = await callFlask(sender, text)
@@ -1617,40 +2070,151 @@ async function connectToWhatsApp() {
     })
 }
 
-// Send server
-const sendServer = http.createServer(async (req, res) => {
-    if (req.method === 'POST' && req.url === '/send') {
+function sendJson(res, statusCode, payload) {
+    res.writeHead(statusCode, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Cache-Control': 'no-store'
+    })
+    res.end(JSON.stringify(payload))
+}
+
+function readJsonBody(req) {
+    return new Promise((resolve, reject) => {
         let body = ''
-        req.on('data', chunk => body += chunk)
-        req.on('end', async () => {
-            try {
-                const { to, message } = JSON.parse(body)
-                if (IGNORED_GROUPS.has(to)) {
-                    console.log(`Skipped send to forbidden group: ${to}`)
-                    res.writeHead(200)
-                    res.end(JSON.stringify({ success: true, skipped: true }))
-                    return
-                }
-                if (to === 'status@broadcast') {
-                    await activeSock.sendMessage('status@broadcast', { text: message }, { statusJidList: [activeSock.user.id] })
-                } else {
-                    await activeSock.sendMessage(to, { text: message })
-                }
-                console.log(`✓ Sent to ${to}: ${message}`)
-                res.writeHead(200)
-                res.end(JSON.stringify({ success: true }))
-            } catch (err) {
-                console.error('Send error:', err.message)
-                res.writeHead(500)
-                res.end(JSON.stringify({ success: false, error: err.message }))
+        req.setEncoding('utf8')
+        req.on('data', chunk => {
+            body += chunk
+            if (Buffer.byteLength(body) > 32 * 1024) {
+                reject(new Error('Request body is too large.'))
+                req.destroy()
             }
         })
+        req.on('end', () => {
+            try {
+                resolve(body ? JSON.parse(body) : {})
+            } catch {
+                reject(new Error('Request body must be valid JSON.'))
+            }
+        })
+        req.on('error', reject)
+    })
+}
+
+function isAuthorizedControlRequest(req) {
+    const expected = process.env.JOEBOT_CONTROL_TOKEN || ''
+    if (!expected) return true
+    return req.headers['x-joebot-control'] === expected
+}
+
+function normalizeSendTarget(rawTarget) {
+    const value = String(rawTarget || '').trim()
+    if (value === 'status@broadcast' || value.endsWith('@g.us') || value.endsWith('@s.whatsapp.net') || value.endsWith('@lid')) {
+        return value
+    }
+    const number = value.replace(/\D/g, '')
+    if (!/^\d{8,15}$/.test(number)) throw new Error('Enter one phone number with country code or a valid WhatsApp JID.')
+    return `${number}@s.whatsapp.net`
+}
+
+async function sendTextMessage(to, message) {
+    if (!activeSock || connectionState !== 'connected') throw new Error('WhatsApp is not connected.')
+    const text = String(message || '').trim()
+    if (!text) throw new Error('Message is required.')
+    if (text.length > 4000) throw new Error('Message must be 4000 characters or fewer.')
+    const target = normalizeSendTarget(to)
+    if (IGNORED_GROUPS.has(target)) return { success: true, skipped: true, to: target }
+    if (target === 'status@broadcast') {
+        await activeSock.sendMessage(target, { text }, { statusJidList: [activeSock.user.id] })
     } else {
-        res.writeHead(404)
-        res.end()
+        await activeSock.sendMessage(target, { text })
+    }
+    activityLog.add('message_sent', { jid: target, source: 'dashboard' })
+    console.log(`✓ Sent dashboard message to ${target}`)
+    return { success: true, to: target }
+}
+
+// Loopback control and send server used by Flask.
+const sendServer = http.createServer(async (req, res) => {
+    try {
+        const url = new URL(req.url, 'http://127.0.0.1')
+
+        if (req.method === 'POST' && url.pathname === '/send') {
+            const body = await readJsonBody(req)
+            sendJson(res, 200, await sendTextMessage(body.to, body.message))
+            return
+        }
+
+        if (!url.pathname.startsWith('/control/')) {
+            sendJson(res, 404, { success: false, error: 'Not found.' })
+            return
+        }
+        if (!isAuthorizedControlRequest(req)) {
+            sendJson(res, 401, { success: false, error: 'Unauthorized.' })
+            return
+        }
+
+        if (req.method === 'GET' && url.pathname === '/control/state') {
+            sendJson(res, 200, getRuntimeState())
+            return
+        }
+        if (req.method === 'GET' && url.pathname === '/control/logs') {
+            sendJson(res, 200, { entries: activityLog.recent(url.searchParams.get('limit')) })
+            return
+        }
+        if (req.method === 'GET' && url.pathname === '/control/chats') {
+            sendJson(res, 200, { chats: getRecentChats(url.searchParams.get('limit')) })
+            return
+        }
+        if (req.method === 'GET' && url.pathname === '/control/messages') {
+            const jid = url.searchParams.get('jid')
+            if (!jid) {
+                sendJson(res, 400, { success: false, error: 'jid is required.' })
+                return
+            }
+            sendJson(res, 200, { jid, messages: getRecentMessages(jid, url.searchParams.get('limit')) })
+            return
+        }
+        if (req.method === 'POST' && url.pathname === '/control/bot/start') {
+            await startWhatsApp()
+            sendJson(res, 200, getRuntimeState())
+            return
+        }
+        if (req.method === 'POST' && url.pathname === '/control/bot/stop') {
+            await stopWhatsApp()
+            sendJson(res, 200, getRuntimeState())
+            return
+        }
+        if (req.method === 'POST' && url.pathname === '/control/send') {
+            const body = await readJsonBody(req)
+            sendJson(res, 200, await sendTextMessage(body.to, body.message))
+            return
+        }
+        if (req.method === 'PUT' && url.pathname === '/control/command') {
+            const body = await readJsonBody(req)
+            runtimeSettings.setCommand(body.command, body.enabled === true)
+            activityLog.add('setting_changed', { setting: body.command, enabled: body.enabled === true })
+            sendJson(res, 200, { settings: runtimeSettings.snapshot() })
+            return
+        }
+        if (req.method === 'PUT' && url.pathname === '/control/feature') {
+            const body = await readJsonBody(req)
+            runtimeSettings.setFeature(body.feature, body.enabled === true)
+            activityLog.add('setting_changed', { setting: body.feature, enabled: body.enabled === true })
+            sendJson(res, 200, { settings: runtimeSettings.snapshot() })
+            return
+        }
+
+        sendJson(res, 404, { success: false, error: 'Control route not found.' })
+    } catch (err) {
+        console.error('Control server error:', err.message)
+        sendJson(res, /required|valid|Unknown|4000|phone number/i.test(err.message) ? 400 : 500, {
+            success: false,
+            error: err.message
+        })
     }
 })
 
 const SEND_SERVER_HOST = process.env.SEND_SERVER_HOST || '127.0.0.1'
-sendServer.listen(5001, SEND_SERVER_HOST, () => console.log(`Send server listening on ${SEND_SERVER_HOST}:5001`))
-connectToWhatsApp()
+const SEND_SERVER_PORT = Number(process.env.SEND_SERVER_PORT || 5001)
+sendServer.listen(SEND_SERVER_PORT, SEND_SERVER_HOST, () => console.log(`Control server listening on ${SEND_SERVER_HOST}:${SEND_SERVER_PORT}`))
+if (desiredRunning) startWhatsApp().catch(err => console.error('Initial WhatsApp connection error:', err.message))

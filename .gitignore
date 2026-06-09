@@ -2,6 +2,8 @@
 .env
 credentials.json
 token.json
+cookies.txt
+whatsapp/cookies.txt
 
 # Auth sessions
 auth_info/
@@ -19,9 +21,12 @@ node_modules/
 
 # Downloads and media
 whatsapp/downloads/
+whatsapp/anti_delete_cache/
 whatsapp/saved_statuses/
 whatsapp/view_once/
 whatsapp/wa_drafts/
+whatsapp/data/
+data/
 
 # Zip files
 *.zip

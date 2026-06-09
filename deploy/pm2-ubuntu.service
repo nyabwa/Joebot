@@ -1,0 +1,18 @@
+[Unit]
+Description=JoeBot PM2 process manager
+Documentation=https://pm2.keymetrics.io/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+Environment=PATH=/home/ubuntu/joebot/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=PM2_HOME=/home/ubuntu/.pm2
+ExecStart=/usr/local/bin/pm2 resurrect
+ExecReload=/usr/local/bin/pm2 reload all
+ExecStop=/usr/local/bin/pm2 kill
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

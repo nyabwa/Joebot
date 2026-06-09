@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>JoeBot Control</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='control.css') }}">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <a class="brand" href="#overview"><span class="logo-mark small">J</span><span>JOE<span class="green">BOT</span></span></a>
+      <nav>
+        <a class="nav-link active" href="#overview">Overview</a>
+        <a class="nav-link" href="#chats">Chats</a>
+        <a class="nav-link" href="#commands">Commands</a>
+        <a class="nav-link" href="#automation">Automation</a>
+        <a class="nav-link" href="#logs">Activity</a>
+        <a class="nav-link" href="/wa-reviews">Review drafts</a>
+        <a class="nav-link" href="/contacts">Contacts</a>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="connection-mini"><span id="sideDot" class="dot"></span><span id="sideStatus">Checking</span></div>
+        <button id="logoutButton" class="button ghost full" type="button">Sign out</button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">WhatsApp operations</p>
+          <h1>Control center</h1>
+        </div>
+        <button id="refreshButton" class="button secondary" type="button">Refresh</button>
+      </header>
+
+      <section id="overview" class="section">
+        <div class="section-head"><div><p class="eyebrow">Live state</p><h2>Account overview</h2></div></div>
+        <div class="metrics">
+          <article class="metric accent-card"><span>WhatsApp</span><strong id="connectionState">Checking</strong><small id="accountId">Reading account state</small></article>
+          <article class="metric"><span>Messages cached</span><strong id="messageCount">0</strong><small>Recent in-memory chat records</small></article>
+          <article class="metric"><span>Last connected</span><strong id="lastConnected">Never</strong><small id="connectionError">No connection error</small></article>
+        </div>
+
+        <div class="grid-two">
+          <article class="panel">
+            <p class="eyebrow">Connection</p>
+            <h3>Bot lifecycle</h3>
+            <p class="muted">Stop the WhatsApp socket while keeping Flask and this dashboard online.</p>
+            <div class="button-row bottom-actions">
+              <button id="startButton" class="button primary" type="button">Start bot</button>
+              <button id="stopButton" class="button danger" type="button">Stop bot</button>
+            </div>
+            <p id="scanNotice" class="warning hidden"></p>
+          </article>
+
+          <article class="panel">
+            <p class="eyebrow">Direct send</p>
+            <h3>Send WhatsApp message</h3>
+            <form id="sendForm">
+              <label for="sendTo">Phone number or JID</label>
+              <input id="sendTo" placeholder="254712345678" required>
+              <label for="sendMessage">Message</label>
+              <textarea id="sendMessage" rows="3" maxlength="4000" required></textarea>
+              <div class="form-footer"><span id="sendResult" class="muted"></span><button class="button primary" type="submit">Send</button></div>
+            </form>
+          </article>
+        </div>
+      </section>
+
+      <section id="chats" class="section">
+        <div class="section-head">
+          <div><p class="eyebrow">Recent memory</p><h2>Chats</h2></div>
+          <p class="muted section-note">Messages appear after this bot process receives them.</p>
+        </div>
+        <div class="chat-layout panel">
+          <div id="chatList" class="chat-list"></div>
+          <div class="conversation">
+            <div id="conversationHeader" class="conversation-header">Select a chat</div>
+            <div id="messageList" class="message-list"><div class="empty">No chat selected.</div></div>
+            <form id="chatReplyForm" class="chat-compose hidden">
+              <input id="chatReply" maxlength="4000" placeholder="Write a message">
+              <button class="button primary" type="submit">Send</button>
+            </form>
+          </div>
+        </div>
+      </section>
+
+      <section id="commands" class="section">
+        <div class="section-head">
+          <div><p class="eyebrow">Feature gates</p><h2>Slash commands</h2></div>
+          <p class="muted section-note">Disabled commands remain visible but cannot execute.</p>
+        </div>
+        <div id="commandGrid" class="toggle-grid"></div>
+      </section>
+
+      <section id="automation" class="section">
+        <div class="section-head"><div><p class="eyebrow">Background behavior</p><h2>Automation</h2></div></div>
+        <div id="featureGrid" class="toggle-grid feature-grid"></div>
+      </section>
+
+      <section id="logs" class="section">
+        <div class="section-head"><div><p class="eyebrow">Observability</p><h2>Activity log</h2></div></div>
+        <article class="panel log-panel"><div id="logList"></div></article>
+      </section>
+    </main>
+  </div>
+
+  <div id="toast" class="toast"></div>
+  <script>window.JOEBOT_CSRF = {{ csrf_token|tojson }};</script>
+  <script src="{{ url_for('static', filename='control.js') }}"></script>
+</body>
+</html>
