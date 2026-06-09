@@ -9,6 +9,7 @@ const {
     S_WHATSAPP_NET
 } = require('@whiskeysockets/baileys')
 const qrcode = require('qrcode-terminal')
+const crypto = require('crypto')
 const fs = require('fs')
 const path = require('path')
 require('dotenv').config({ path: path.join(__dirname, '.env'), quiet: true })
@@ -28,6 +29,16 @@ const YTDLP_COOKIES_PATH = process.env.YTDLP_COOKIES_PATH || path.join(__dirname
 const YTDLP_PROXY_URL = process.env.YTDLP_PROXY_URL || ''
 const MAX_DOWNLOAD_SIZE_MB = Number(process.env.WA_MAX_DOWNLOAD_MB || 50)
 const MAX_DOWNLOAD_SIZE_BYTES = MAX_DOWNLOAD_SIZE_MB * 1024 * 1024
+const FLASK_HOST = process.env.FLASK_HOST || '127.0.0.1'
+const FLASK_PORT = Number(process.env.FLASK_PORT || 5000)
+const JOEBOT_INTERNAL_TOKEN = process.env.JOEBOT_INTERNAL_TOKEN || ''
+const JOEBOT_CONTROL_TOKEN = process.env.JOEBOT_CONTROL_TOKEN || ''
+for (const [name, value] of [
+    ['JOEBOT_INTERNAL_TOKEN', JOEBOT_INTERNAL_TOKEN],
+    ['JOEBOT_CONTROL_TOKEN', JOEBOT_CONTROL_TOKEN]
+]) {
+    if (value.length < 32) throw new Error(`${name} must be configured with at least 32 characters.`)
+}
 const VIDEO_FORMATS = [
     'bv*[height<=720][vcodec!*=h265]+ba/b[height<=720][vcodec!*=h265]/b[height<=720]',
     'bv*[vcodec!*=h265]+ba/b[vcodec!*=h265]/b',
@@ -52,16 +63,39 @@ const IGNORED_GROUPS = new Set([
     '120363334397550146@g.us'
 ])
 
+function internalFlaskPath(route) {
+    return `/internal${route.startsWith('/') ? route : `/${route}`}`
+}
+
+function internalFlaskHeaders(body) {
+    const headers = { 'X-JoeBot-Internal': JOEBOT_INTERNAL_TOKEN }
+    if (body !== undefined) {
+        headers['Content-Type'] = 'application/json'
+        headers['Content-Length'] = Buffer.byteLength(body)
+    }
+    return headers
+}
+
 function callFlask(sender, message) {
     return new Promise((resolve, reject) => {
         const body = JSON.stringify({ sender, message })
         const req = http.request({
-            hostname: 'localhost', port: 5000, path: '/wa-draft', method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
+            hostname: FLASK_HOST,
+            port: FLASK_PORT,
+            path: internalFlaskPath('/wa-draft'),
+            method: 'POST',
+            headers: internalFlaskHeaders(body)
         }, (res) => {
             let data = ''
             res.on('data', chunk => data += chunk)
-            res.on('end', () => resolve(JSON.parse(data)))
+            res.on('end', () => {
+                if (res.statusCode < 200 || res.statusCode >= 300) {
+                    reject(new Error(`Flask returned HTTP ${res.statusCode}: ${data.slice(0, 200)}`))
+                    return
+                }
+                try { resolve(JSON.parse(data)) }
+                catch (err) { reject(new Error(`JSON parse failed: ${data.slice(0, 100)}`)) }
+            })
         })
         req.on('error', reject)
         req.write(body)
@@ -73,13 +107,20 @@ function callFlaskPost(path2, payload) {
     return new Promise((resolve, reject) => {
         const body = JSON.stringify(payload)
         const req = http.request({
-            hostname: 'localhost', port: 5000, path: path2, method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+            hostname: FLASK_HOST,
+            port: FLASK_PORT,
+            path: internalFlaskPath(path2),
+            method: 'POST',
+            headers: internalFlaskHeaders(body),
             timeout: 60000
         }, (res) => {
             let data = ''
             res.on('data', chunk => data += chunk)
             res.on('end', () => {
+                if (res.statusCode < 200 || res.statusCode >= 300) {
+                    reject(new Error(`Flask returned HTTP ${res.statusCode}: ${data.slice(0, 200)}`))
+                    return
+                }
                 try { resolve(JSON.parse(data)) }
                 catch(e) { reject(new Error(`JSON parse failed: ${data.slice(0,100)}`)) }
             })
@@ -100,12 +141,20 @@ function callFlaskPost(path2, payload) {
 function callFlaskGet(path2) {
     return new Promise((resolve, reject) => {
         const req = http.request({
-            hostname: 'localhost', port: 5000, path: path2, method: 'GET',
+            hostname: FLASK_HOST,
+            port: FLASK_PORT,
+            path: internalFlaskPath(path2),
+            method: 'GET',
+            headers: internalFlaskHeaders(),
             timeout: 60000
         }, (res) => {
             let data = ''
             res.on('data', chunk => data += chunk)
             res.on('end', () => {
+                if (res.statusCode < 200 || res.statusCode >= 300) {
+                    reject(new Error(`Flask returned HTTP ${res.statusCode}: ${data.slice(0, 200)}`))
+                    return
+                }
                 try { resolve(JSON.parse(data)) }
                 catch(e) { reject(new Error(`JSON parse failed: ${data.slice(0,100)}`)) }
             })
@@ -1036,15 +1085,7 @@ async function handleCommand(sock, sender, text) {
         }
 
         case '/notes': {
-            const result = await new Promise((resolve, reject) => {
-                const req = http.request({ hostname: 'localhost', port: 5000, path: '/get-notes', method: 'GET' }, (res) => {
-                    let d = ''
-                    res.on('data', c => d += c)
-                    res.on('end', () => resolve(JSON.parse(d)))
-                })
-                req.on('error', reject)
-                req.end()
-            })
+            const result = await callFlaskGet('/get-notes')
             if (!result.notes || result.notes.length === 0) {
                 await sock.sendMessage(sender, { text: '📝 No notes yet.' }); break
             }
@@ -1100,17 +1141,7 @@ async function handleCommand(sock, sender, text) {
                 break
             }
             try {
-                const contactsResult = await new Promise((resolve, reject) => {
-                    const req = http.request({
-                        hostname: 'localhost', port: 5000, path: '/get-contacts-list', method: 'GET'
-                    }, (res) => {
-                        let d = ''
-                        res.on('data', c => d += c)
-                        res.on('end', () => resolve(JSON.parse(d)))
-                    })
-                    req.on('error', reject)
-                    req.end()
-                })
+                const contactsResult = await callFlaskGet('/get-contacts-list')
                 const contacts = contactsResult.contacts || []
                 if (contacts.length === 0) {
                     await sock.sendMessage(sender, { text: '❌ No contacts saved. Add contacts first at /contacts.' })
@@ -1235,17 +1266,7 @@ async function handleCommand(sock, sender, text) {
 
         case '/todos': {
             try {
-                const result = await new Promise((resolve, reject) => {
-                    const req = http.request({
-                        hostname: 'localhost', port: 5000, path: '/todo-list', method: 'GET'
-                    }, (res) => {
-                        let d = ''
-                        res.on('data', c => d += c)
-                        res.on('end', () => resolve(JSON.parse(d)))
-                    })
-                    req.on('error', reject)
-                    req.end()
-                })
+                const result = await callFlaskGet('/todo-list')
                 const pending = result.pending || []
                 const done = result.done || []
                 if (pending.length === 0 && done.length === 0) {
@@ -1348,20 +1369,8 @@ async function handleCommand(sock, sender, text) {
         }
 
         case '/prayer': {
-            const verseBody = JSON.stringify({ action: 'verse' })
-            const req2 = http.request({
-                hostname: 'localhost', port: 5000, path: '/get-verse', method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(verseBody) }
-            }, res => {
-                let d = ''
-                res.on('data', c => d += c)
-                res.on('end', async () => {
-                    const data = JSON.parse(d)
-                    await sock.sendMessage(sender, { text: data.result })
-                })
-            })
-            req2.write(verseBody)
-            req2.end()
+            const verseData = await callFlaskPost('/get-verse', { action: 'verse' })
+            await sock.sendMessage(sender, { text: verseData.result })
             break
         }
 
@@ -2101,9 +2110,12 @@ function readJsonBody(req) {
 }
 
 function isAuthorizedControlRequest(req) {
-    const expected = process.env.JOEBOT_CONTROL_TOKEN || ''
-    if (!expected) return true
-    return req.headers['x-joebot-control'] === expected
+    const supplied = req.headers['x-joebot-control']
+    if (typeof supplied !== 'string') return false
+    const suppliedBuffer = Buffer.from(supplied)
+    const expectedBuffer = Buffer.from(JOEBOT_CONTROL_TOKEN)
+    if (suppliedBuffer.length !== expectedBuffer.length) return false
+    return crypto.timingSafeEqual(suppliedBuffer, expectedBuffer)
 }
 
 function normalizeSendTarget(rawTarget) {

@@ -8,8 +8,9 @@ import functools
 import hmac
 import secrets
 import time
-from flask import Flask, render_template, request, jsonify, redirect, session, url_for
+from flask import Blueprint, Flask, render_template, request, jsonify, redirect, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.middleware.proxy_fix import ProxyFix
 # pyrefly: ignore [missing-import]
 from dotenv import load_dotenv
 from google.auth.transport.requests import Request
@@ -25,9 +26,13 @@ from db import get_email_drafts, get_wa_drafts, update_status, save_wa_draft, ge
 
 load_dotenv()
 app = Flask(__name__)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 app.secret_key = os.getenv('FLASK_SECRET_KEY') or secrets.token_hex(32)
 app.config.update(
+    MAX_CONTENT_LENGTH=int(os.getenv('FLASK_MAX_CONTENT_MB', '70')) * 1024 * 1024,
+    PREFERRED_URL_SCHEME='https',
     SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_NAME='joebot_session',
     SESSION_COOKIE_SAMESITE='Strict',
     SESSION_COOKIE_SECURE=os.getenv('DASHBOARD_SECURE_COOKIES', '').lower() in ('1', 'true', 'yes')
 )
@@ -37,6 +42,7 @@ DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
 DASHBOARD_AUTH_FILE = os.path.join(DATA_DIR, 'dashboard_auth.json')
 JOEBOT_CONTROL_TOKEN = os.getenv('JOEBOT_CONTROL_TOKEN', '')
 JOEBOT_CONTROL_URL = os.getenv('JOEBOT_CONTROL_URL', 'http://127.0.0.1:5001/control')
+JOEBOT_INTERNAL_TOKEN = os.getenv('JOEBOT_INTERNAL_TOKEN', '')
 CONTROL_PROXY_ROUTES = {
     'state': ('GET',),
     'logs': ('GET',),
@@ -49,6 +55,7 @@ CONTROL_PROXY_ROUTES = {
     'feature': ('PUT',)
 }
 dashboard_login_attempts = {}
+internal = Blueprint('internal', __name__, url_prefix='/internal')
 
 SCOPES = ['https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/gmail.readonly']
 
@@ -64,6 +71,20 @@ def dashboard_required(view):
 
 def is_loopback_address(address):
     return address in ('127.0.0.1', '::1') or address.startswith('::ffff:127.0.0.1')
+
+@internal.before_request
+def require_internal_service_auth():
+    if not is_loopback_address(request.remote_addr or ''):
+        return jsonify({'error': 'Not found.'}), 404
+    if len(JOEBOT_INTERNAL_TOKEN) < 32:
+        return jsonify({'error': 'Internal service authentication is not configured.'}), 503
+    supplied = request.headers.get('X-JoeBot-Internal', '')
+    if not supplied or not hmac.compare_digest(supplied, JOEBOT_INTERNAL_TOKEN):
+        return jsonify({'error': 'Unauthorized.'}), 401
+
+@internal.route('/health')
+def internal_health():
+    return jsonify({'status': 'ok'})
 
 def load_dashboard_auth():
     if not os.path.exists(DASHBOARD_AUTH_FILE):
@@ -261,7 +282,7 @@ def wa_reviews():
     skipped = get_wa_drafts('skipped')
     return render_template('wa_reviews.html', pending=pending, sent=sent, skipped=skipped)
 
-@app.route('/wa-draft', methods=['POST'])
+@internal.route('/wa-draft', methods=['POST'])
 def wa_draft():
     import time
     # pyrefly: ignore [missing-import]
@@ -501,7 +522,7 @@ def delete_contact():
     supabase.table('contacts').delete().eq('id', data['id']).execute()
     return jsonify({'success': True})
 
-@app.route('/contact-lock', methods=['POST'])
+@internal.route('/contact-lock', methods=['POST'])
 def contact_lock():
     from db import lock_contact, unlock_contact, is_locked, get_contact_by_phone
     data = request.json
@@ -526,7 +547,7 @@ def contact_lock():
 
     return jsonify({'success': False})
 
-@app.route('/get-weather', methods=['POST'])
+@internal.route('/get-weather', methods=['POST'])
 def get_weather():
     from groq import Groq
     data = request.json
@@ -554,7 +575,7 @@ def get_weather():
         result = f"❌ Could not fetch weather for {location}. Try again."
     return jsonify({'result': result})
 
-@app.route('/ip-info', methods=['POST'])
+@internal.route('/ip-info', methods=['POST'])
 def ip_info():
     import urllib.request as ur
     data = request.json or {}
@@ -590,7 +611,7 @@ def ip_info():
     except Exception as e:
         return jsonify({'result': f'❌ Error: {str(e)}'})
 
-@app.route('/num-info', methods=['POST'])
+@internal.route('/num-info', methods=['POST'])
 def num_info():
     from groq import Groq
     data = request.json or {}
@@ -623,7 +644,7 @@ Only return what can be determined from the number format. Do not guess unknown 
     except Exception as e:
         return jsonify({'result': f'❌ Error: {str(e)}'})
 
-@app.route('/my-ip', methods=['GET'])
+@internal.route('/my-ip', methods=['GET'])
 def my_ip():
     import urllib.request as ur
     try:
@@ -648,24 +669,24 @@ def my_ip():
     except Exception as e:
         return jsonify({'result': f'❌ Error: {str(e)}'})
 
-@app.route('/save-note', methods=['POST'])
+@internal.route('/save-note', methods=['POST'])
 def save_note():
     data = request.json
     note = data.get('note', '')
     supabase.table('notes').insert({'note': note}).execute()
     return jsonify({'success': True})
 
-@app.route('/get-notes', methods=['GET'])
+@internal.route('/get-notes', methods=['GET'])
 def get_notes():
     notes = supabase.table('notes').select('*').order('created_at', desc=True).limit(20).execute().data
     return jsonify({'notes': notes})
 
-@app.route('/clear-notes', methods=['POST'])
+@internal.route('/clear-notes', methods=['POST'])
 def clear_notes():
     supabase.table('notes').delete().neq('id', '00000000-0000-0000-0000-000000000000').execute()
     return jsonify({'success': True})
 
-@app.route('/calculate', methods=['POST'])
+@internal.route('/calculate', methods=['POST'])
 def calculate():
     from groq import Groq
     data = request.json
@@ -681,7 +702,7 @@ def calculate():
     result = response.choices[0].message.content.strip()
     return jsonify({'result': result})
 
-@app.route('/translate', methods=['POST'])
+@internal.route('/translate', methods=['POST'])
 def translate():
     from groq import Groq
     data = request.json
@@ -697,7 +718,7 @@ def translate():
     result = response.choices[0].message.content.strip()
     return jsonify({'result': result})
 
-@app.route('/get-wiki', methods=['POST'])
+@internal.route('/get-wiki', methods=['POST'])
 def get_wiki():
     from groq import Groq
     data = request.json
@@ -712,7 +733,7 @@ def get_wiki():
     )
     return jsonify({'result': response.choices[0].message.content.strip()})
 
-@app.route('/get-fact', methods=['POST'])
+@internal.route('/get-fact', methods=['POST'])
 def get_fact():
     from groq import Groq
     data = request.json
@@ -725,7 +746,7 @@ def get_fact():
     )
     return jsonify({'result': response.choices[0].message.content.strip()})
 
-@app.route('/get-quiz', methods=['POST'])
+@internal.route('/get-quiz', methods=['POST'])
 def get_quiz():
     from groq import Groq
     data = request.json
@@ -741,7 +762,7 @@ def get_quiz():
     )
     return jsonify({'result': response.choices[0].message.content.strip()})
 
-@app.route('/get-diagnose', methods=['POST'])
+@internal.route('/get-diagnose', methods=['POST'])
 def get_diagnose():
     from groq import Groq
     data = request.json
@@ -766,7 +787,7 @@ Be concise — this is WhatsApp.'''
     )
     return jsonify({'result': response.choices[0].message.content.strip()})
 
-@app.route('/get-news', methods=['POST'])
+@internal.route('/get-news', methods=['POST'])
 def get_news():
     import urllib.request as ur
     import xml.etree.ElementTree as ET
@@ -793,7 +814,7 @@ def get_news():
     except Exception as e:
         return jsonify({'result': f'❌ Could not fetch live Kenya headlines: {str(e)}'})
 
-@app.route('/get-forex', methods=['POST'])
+@internal.route('/get-forex', methods=['POST'])
 def get_forex():
     import urllib.request as ur
     try:
@@ -812,7 +833,7 @@ def get_forex():
     except Exception as e:
         return jsonify({'result': f'❌ Could not fetch rates: {str(e)}'})
 
-@app.route('/get-fuel', methods=['POST'])
+@internal.route('/get-fuel', methods=['POST'])
 def get_fuel():
     return jsonify({
         'result': (
@@ -823,14 +844,14 @@ def get_fuel():
         )
     })
 
-@app.route('/get-verse', methods=['POST'])
+@internal.route('/get-verse', methods=['POST'])
 def get_verse():
     from summary import get_daily_verse
     reference, text = get_daily_verse()
     result = f"📖 *{reference}*\n\n_{text}_\n\n🙏 God bless you, Joseph."
     return jsonify({'result': result})
 
-@app.route('/get-motivate', methods=['POST'])
+@internal.route('/get-motivate', methods=['POST'])
 def get_motivate():
     from groq import Groq
     client = Groq(api_key=os.getenv('GROQ_API_KEY'))
@@ -843,12 +864,12 @@ def get_motivate():
     )
     return jsonify({'result': response.choices[0].message.content.strip()})
 
-@app.route('/get-contacts-list', methods=['GET'])
+@internal.route('/get-contacts-list', methods=['GET'])
 def get_contacts_list():
     contacts = get_contacts()
     return jsonify({'contacts': contacts})
 
-@app.route('/todo-add', methods=['POST'])
+@internal.route('/todo-add', methods=['POST'])
 def todo_add():
     from db import add_todo
     data = request.json
@@ -856,14 +877,14 @@ def todo_add():
     add_todo(task)
     return jsonify({'success': True})
 
-@app.route('/todo-list', methods=['GET'])
+@internal.route('/todo-list', methods=['GET'])
 def todo_list():
     from db import get_todos
     pending = get_todos('pending')
     done = get_todos('done')
     return jsonify({'pending': pending, 'done': done})
 
-@app.route('/todo-done', methods=['POST'])
+@internal.route('/todo-done', methods=['POST'])
 def todo_done():
     from db import complete_todo
     data = request.json
@@ -873,7 +894,7 @@ def todo_done():
         return jsonify({'success': True, 'task': task})
     return jsonify({'success': False, 'message': 'Todo not found'})
 
-@app.route('/generate-qr', methods=['POST'])
+@internal.route('/generate-qr', methods=['POST'])
 def generate_qr():
     import qrcode
     import base64
@@ -892,7 +913,7 @@ def generate_qr():
     os.unlink(tmp_path)
     return jsonify({'success': True, 'image': img_b64})
 
-@app.route('/generate-pdf', methods=['POST'])
+@internal.route('/generate-pdf', methods=['POST'])
 def generate_pdf():
     from reportlab.lib.pagesizes import A4
     from reportlab.pdfgen import canvas
@@ -940,7 +961,7 @@ def generate_pdf():
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)})
 
-@app.route('/answer-question', methods=['POST'])
+@internal.route('/answer-question', methods=['POST'])
 def answer_question():
     from groq import Groq
     data = request.json
@@ -973,7 +994,7 @@ Answer in {language}. Rules:
     )
     return jsonify({'success': True, 'result': response.choices[0].message.content.strip()})
 
-@app.route('/transcribe', methods=['POST'])
+@internal.route('/transcribe', methods=['POST'])
 def transcribe():
     import whisper
     import tempfile
@@ -994,7 +1015,7 @@ def transcribe():
     except Exception as e:
         return jsonify({'success': False, 'text': str(e)})
 
-@app.route('/analyze-image', methods=['POST'])
+@internal.route('/analyze-image', methods=['POST'])
 def analyze_image():
     from groq import Groq
     import traceback
@@ -1027,7 +1048,7 @@ def analyze_image():
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)})
 
-@app.route('/summarize-pdf', methods=['POST'])
+@internal.route('/summarize-pdf', methods=['POST'])
 def summarize_pdf():
     from groq import Groq
     import PyPDF2
@@ -1069,7 +1090,7 @@ def summarize_pdf():
     except Exception as e:
         return jsonify({'success': False, 'result': str(e)})
 
-@app.route('/summarize-youtube', methods=['POST'])
+@internal.route('/summarize-youtube', methods=['POST'])
 def summarize_youtube():
     from groq import Groq
     import glob
@@ -1127,7 +1148,7 @@ def summarize_youtube():
     except Exception as e:
         return jsonify({'success': False, 'result': str(e)})
 
-@app.route('/social-lookup', methods=['POST'])
+@internal.route('/social-lookup', methods=['POST'])
 def social_lookup():
     import urllib.request as ur
     data = request.json or {}
@@ -1241,7 +1262,7 @@ def social_lookup():
     except Exception as e:
         return jsonify({'success': False, 'result': f'❌ Could not fetch info for @{username} on {platform}.\nError: {str(e)}'})
 
-@app.route('/check-email', methods=['POST'])
+@internal.route('/check-email', methods=['POST'])
 def check_email():
     import urllib.request as ur
     import re
@@ -1341,7 +1362,7 @@ def check_email():
     results.append(f'\n🔗 https://haveibeenpwned.com/account/{email.split("@")[0]}')
     return jsonify({'result': '\n'.join(results)})
 
-@app.route('/check-breach', methods=['POST'])
+@internal.route('/check-breach', methods=['POST'])
 def check_breach():
     import urllib.request as ur
     import hashlib
@@ -1417,7 +1438,7 @@ def check_breach():
     results.append(f'\n🔗 https://haveibeenpwned.com/account/{email}')
     return jsonify({'result': '\n'.join(results)})
 
-@app.route('/check-username', methods=['POST'])
+@internal.route('/check-username', methods=['POST'])
 def check_username():
     import subprocess
     data = request.json or {}
@@ -1460,7 +1481,7 @@ def check_username():
 
     return jsonify({'result': '\n'.join(results)})
 
-@app.route('/check-phone', methods=['POST'])
+@internal.route('/check-phone', methods=['POST'])
 def check_phone():
     import urllib.request as ur
     data = request.json
@@ -1495,6 +1516,8 @@ def check_phone():
 
     results.append(f'\n🔗 https://www.truecaller.com/search/ke/{number}')
     return jsonify({'result': '\n'.join(results)})
+
+app.register_blueprint(internal)
 
 if __name__ == '__main__':
     debug = os.getenv('FLASK_DEBUG', '').lower() in ('1', 'true', 'yes')

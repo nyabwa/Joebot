@@ -11,14 +11,20 @@ DASHBOARD_PASSWORD=use-a-long-unique-password
 FLASK_SECRET_KEY=generate-a-long-random-secret
 DASHBOARD_SECURE_COOKIES=false
 JOEBOT_CONTROL_URL=http://127.0.0.1:5001/control
-JOEBOT_CONTROL_TOKEN=
+JOEBOT_CONTROL_TOKEN=generate-a-separate-random-token
+JOEBOT_INTERNAL_TOKEN=generate-a-separate-random-token
 ```
 
 On the first local visit, JoeBot asks you to create a password with at least 12 characters. The hash is stored in ignored `data/dashboard_auth.json`. `DASHBOARD_PASSWORD` can instead be set in `.env` for deployment-managed credentials.
 
 Set `DASHBOARD_SECURE_COOKIES=true` when Flask is served through HTTPS.
 
-The control API binds to `127.0.0.1` by default. To authenticate Flask-to-Node calls as well, set the same random `JOEBOT_CONTROL_TOKEN` in both `.env` and `whatsapp/.env`.
+The local services use separate directional tokens:
+
+- `JOEBOT_CONTROL_TOKEN` authenticates Flask requests to the Node control API.
+- `JOEBOT_INTERNAL_TOKEN` authenticates Node requests to Flask's `/internal/*` API.
+
+Generate each token independently with `openssl rand -hex 32`, then set the same corresponding value in both `.env` and `whatsapp/.env`. The Node control server and Flask/Gunicorn both bind to `127.0.0.1`. Nginx returns `404` for `/internal/*`, and Flask additionally requires a loopback source plus `X-JoeBot-Internal`.
 
 ## Run
 
