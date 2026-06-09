@@ -3,12 +3,20 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="dark">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#06182e">
   <title>JoeBot Control Login</title>
+  <script src="{{ url_for('static', filename='control-theme.js') }}"></script>
   <link rel="stylesheet" href="{{ url_for('static', filename='control.css') }}">
 </head>
 <body class="login-body">
   <main class="login-shell">
+    <div class="login-theme">
+      <div class="theme-switcher" role="group" aria-label="Dashboard theme">
+        <button class="theme-option" type="button" data-theme-value="light" aria-pressed="false">Light</button>
+        <button class="theme-option" type="button" data-theme-value="truecaller-blue" aria-pressed="false">Truecaller Blue</button>
+      </div>
+    </div>
     <section class="login-card">
       <div class="logo-mark">J</div>
       <p class="eyebrow">Private operations console</p>

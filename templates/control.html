@@ -3,8 +3,10 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="dark">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#06182e">
   <title>JoeBot Control</title>
+  <script src="{{ url_for('static', filename='control-theme.js') }}"></script>
   <link rel="stylesheet" href="{{ url_for('static', filename='control.css') }}">
 </head>
 <body>
@@ -32,7 +34,13 @@
           <p class="eyebrow">WhatsApp operations</p>
           <h1>Control center</h1>
         </div>
-        <button id="refreshButton" class="button secondary" type="button">Refresh</button>
+        <div class="topbar-actions">
+          <div class="theme-switcher" role="group" aria-label="Dashboard theme">
+            <button class="theme-option" type="button" data-theme-value="light" aria-pressed="false">Light</button>
+            <button class="theme-option" type="button" data-theme-value="truecaller-blue" aria-pressed="false">Truecaller Blue</button>
+          </div>
+          <button id="refreshButton" class="button secondary" type="button">Refresh</button>
+        </div>
       </header>
 
       <section id="overview" class="section">
