@@ -1,0 +1,23 @@
+# Runtime dependencies for the root Flask/Gmail/Supabase service.
+#
+# Install with:
+#   python -m pip install -r requirements.txt
+
+APScheduler==3.11.2
+Flask==3.1.3
+google-api-python-client==2.196.0
+google-auth==2.52.0
+google-auth-oauthlib==1.4.0
+groq==1.2.0
+openai-whisper==20250625
+PyPDF2==3.0.1
+python-dotenv==1.2.2
+qrcode==8.2
+reportlab==4.5.1
+supabase==2.30.0
+
+# Security floors from the June 2026 audit. These are transitive runtime
+# dependencies today, but keeping them explicit prevents vulnerable resolver
+# choices in fresh deployments.
+idna>=3.15
+PyJWT>=2.13.0

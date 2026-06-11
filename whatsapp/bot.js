@@ -791,7 +791,7 @@ async function runLimitedOperation(name, sock, sender, busyMessage, task) {
     }
 }
 
-async function handleCommand(sock, sender, text, actorJid = sender) {
+async function handleCommand(sock, sender, text, actorJid = sender, msg = {}) {
     const parts = text.trim().split(' ')
     const command = parts[0].toLowerCase()
     const arg = parts.slice(1).join(' ').trim()
@@ -864,6 +864,7 @@ async function handleCommand(sock, sender, text, actorJid = sender) {
                 `*📱 WhatsApp*\n` +
                 `/getdp <number> — Profile picture\n` +
                 `/savestatus <number> — Saved statuses\n` +
+                `/viewonce — Save view-once message (reply with /viewonce)\n` +
                 `/download <url> — Download video\n` +
                 `/mp3 <url> — Extract audio\n` +
                 `/sticker — Send image as sticker\n` +
@@ -1613,6 +1614,64 @@ async function handleCommand(sock, sender, text, actorJid = sender) {
             break
         }
 
+        case '/viewonce':
+        case '/vo': {
+            const ctx = msg.message?.extendedTextMessage?.contextInfo
+            const quoted = ctx?.quotedMessage
+            if (!quoted) {
+                await sock.sendMessage(sender, { text: '❌ Reply to a view-once message with /viewonce to save it.' })
+                break
+            }
+            const img = quoted.imageMessage
+            const vid = quoted.videoMessage
+            const aud = quoted.audioMessage
+            if (!img && !vid && !aud) {
+                await sock.sendMessage(sender, { text: '❌ The quoted message is not a view-once media.' })
+                break
+            }
+            try {
+                const fakeMsg = {
+                    key: {
+                        remoteJid: sender,
+                        id: ctx.stanzaId,
+                        fromMe: false,
+                        participant: ctx.participant || sender
+                    },
+                    message: quoted
+                }
+                await sock.sendMessage(sender, { text: '⏳ Retrieving view-once media...' })
+                const buf = await downloadMediaMessage(fakeMsg, 'buffer', {}, {
+                    logger: {
+                        level: 'silent',
+                        trace: () => {}, debug: () => {}, info: () => {},
+                        warn: () => {}, error: () => {}
+                    },
+                    reuploadRequest: sock.updateMediaMessage
+                })
+                if (img) {
+                    await sock.sendMessage(OWNER_JID, { image: buf, caption: '👁️ View-once image retrieved' })
+                    await sock.sendMessage(sender, { text: '✓ Sent to your main number.' })
+                }
+                if (vid) {
+                    await sock.sendMessage(OWNER_JID, { video: buf, caption: '👁️ View-once video retrieved' })
+                    await sock.sendMessage(sender, { text: '✓ Sent to your main number.' })
+                }
+                if (aud) {
+                    await sock.sendMessage(OWNER_JID, {
+                        audio: buf,
+                        mimetype: 'audio/ogg; codecs=opus',
+                        ptt: true
+                    })
+                    await sock.sendMessage(sender, { text: '✓ Sent to your main number.' })
+                }
+                console.log(`✓ View-once retrieved and forwarded to owner`)
+            } catch (err) {
+                console.error('View-once retrieval error:', err.message)
+                await sock.sendMessage(sender, { text: `❌ Could not retrieve: ${err.message.split('\n')[0]}` })
+            }
+            break
+        }
+
         default: {
             await sock.sendMessage(sender, { text: `❓ Unknown command: ${command}\nSend /help to see available commands.` })
         }
@@ -1957,7 +2016,7 @@ async function connectToWhatsApp() {
             // Handle owner/self commands sent from linked devices ("fromMe" messages)
             if (msg.key.fromMe) {
                 if (isCommand) {
-                    await handleCommand(sock, sender, text, commandActorJid)
+                    await handleCommand(sock, sender, text, commandActorJid, msg)
                 }
                 continue
             }
@@ -2164,7 +2223,7 @@ async function connectToWhatsApp() {
             // --- COMMAND HANDLER ---
             if (isCommand) {
                 if (isOwner) {
-                    await handleCommand(sock, sender, text, commandActorJid)
+                    await handleCommand(sock, sender, text, commandActorJid, msg)
                 } else {
                     await sock.sendMessage(OWNER_JID, {
                         text: `⚠️ *Intruder Alert*\n*Number:* ${senderNumber}\n*Command:* ${text}\n*Time:* ${new Date().toLocaleString('en-KE', { timeZone: 'Africa/Nairobi' })}`

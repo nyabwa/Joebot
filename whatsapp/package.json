@@ -14,10 +14,9 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "@whiskeysockets/baileys": "^7.0.0-rc10",
+    "@whiskeysockets/baileys": "^7.0.0-rc13",
     "dotenv": "^17.4.2",
-    "groq-sdk": "^1.2.0",
-    "link-preview-js": "^3.2.0",
+    "groq-sdk": "^1.2.1",
     "qrcode-terminal": "^0.12.0"
   }
 }

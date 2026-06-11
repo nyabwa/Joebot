@@ -1,0 +1,11 @@
+# Development and security-audit tooling.
+#
+# Install with:
+#   python -m pip install -r requirements-dev.txt
+
+-r requirements.txt
+
+pip-audit==2.10.1
+
+# Keep the environment bootstrap tool above known vulnerable versions.
+pip>=26.1.2
