@@ -9,7 +9,8 @@ const COMMANDS = [
     '/broadcast', '/lastmsg', '/online', '/wiki', '/fact', '/quiz', '/diagnose',
     '/news', '/forex', '/fuel', '/todo', '/todos', '/done', '/qr', '/pdf',
     '/block', '/prayer', '/motivate', '/schedule', '/summarize', '/sticker',
-    '/email', '/breach', '/username', '/phone', '/exif'
+    '/email', '/breach', '/username', '/phone', '/exif',
+    '/ask', '/research', '/write', '/plan', '/article', '/research-write'
 ]
 
 const FEATURES = [

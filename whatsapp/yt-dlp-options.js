@@ -39,8 +39,16 @@ function safeYtDlpErrorDetails(error) {
     return redactYtDlpSecrets(error?.stderr || error?.stdout || error?.message || '')
 }
 
+function getYtDlpCookieArgs() {
+    const cookiesPath = '/home/joe-joe/joebot/whatsapp/youtube_cookies.txt'
+    const fs = require('fs')
+    if (fs.existsSync(cookiesPath)) return ['--cookies', cookiesPath]
+    return []
+}
+
 module.exports = {
     DEFAULT_PROXY_DOMAINS,
+    getYtDlpCookieArgs,
     getYtDlpProxyArgs,
     isProxiedYtDlpInput,
     parseProxyDomains,

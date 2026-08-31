@@ -22,6 +22,7 @@ const { runCleanup } = require('./cleanup')
 const { ConcurrencyLimiter, CooldownManager } = require('./rate-limits')
 const {
     getYtDlpProxyArgs,
+    getYtDlpCookieArgs,
     parseProxyDomains,
     safeYtDlpErrorDetails
 } = require('./yt-dlp-options')
@@ -41,6 +42,9 @@ const FLASK_HOST = process.env.FLASK_HOST || '127.0.0.1'
 const FLASK_PORT = Number(process.env.FLASK_PORT || 5000)
 const JOEBOT_INTERNAL_TOKEN = process.env.JOEBOT_INTERNAL_TOKEN || ''
 const JOEBOT_CONTROL_TOKEN = process.env.JOEBOT_CONTROL_TOKEN || ''
+const CREWAI_DASHBOARD_URL = process.env.CREWAI_DASHBOARD_URL || 'http://127.0.0.1:8000'
+const CREWAI_JOEBOT_TOKEN = process.env.CREWAI_JOEBOT_TOKEN || ''
+const CREWAI_REQUEST_TIMEOUT_MS = Number(process.env.CREWAI_REQUEST_TIMEOUT_MS || 180000)
 for (const [name, value] of [
     ['JOEBOT_INTERNAL_TOKEN', JOEBOT_INTERNAL_TOKEN],
     ['JOEBOT_CONTROL_TOKEN', JOEBOT_CONTROL_TOKEN]
@@ -186,6 +190,77 @@ function callFlaskGet(path2) {
         })
         req.end()
     })
+}
+
+function callCrewAIDashboard(sender, message) {
+    return new Promise((resolve, reject) => {
+        let url
+        try {
+            url = new URL('/joebot/execute', CREWAI_DASHBOARD_URL)
+        } catch {
+            reject(new Error('CREWAI_DASHBOARD_URL is invalid'))
+            return
+        }
+
+        const body = JSON.stringify({ sender, message })
+        const headers = {
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(body)
+        }
+        if (CREWAI_JOEBOT_TOKEN) {
+            headers['X-JoeBot-Token'] = CREWAI_JOEBOT_TOKEN
+        }
+
+        const client = url.protocol === 'https:' ? https : http
+        const req = client.request({
+            hostname: url.hostname,
+            port: url.port || (url.protocol === 'https:' ? 443 : 80),
+            path: `${url.pathname}${url.search}`,
+            method: 'POST',
+            headers,
+            timeout: CREWAI_REQUEST_TIMEOUT_MS
+        }, (res) => {
+            let data = ''
+            res.on('data', chunk => data += chunk)
+            res.on('end', () => {
+                let parsed = null
+                try {
+                    parsed = data ? JSON.parse(data) : null
+                } catch {
+                    // Keep parsed null and surface the raw text below.
+                }
+
+                if (res.statusCode < 200 || res.statusCode >= 300) {
+                    const detail = parsed?.detail || data.slice(0, 300) || `HTTP ${res.statusCode}`
+                    reject(new Error(`CrewAI dashboard returned ${res.statusCode}: ${detail}`))
+                    return
+                }
+
+                if (!parsed?.reply) {
+                    reject(new Error('CrewAI dashboard response did not include reply'))
+                    return
+                }
+
+                resolve(parsed)
+            })
+        })
+
+        req.on('error', reject)
+        req.on('timeout', () => {
+            req.destroy()
+            reject(new Error(`CrewAI dashboard timed out after ${CREWAI_REQUEST_TIMEOUT_MS}ms`))
+        })
+        req.write(body)
+        req.end()
+    })
+}
+
+async function sendLongText(sock, jid, text, chunkSize = 3500) {
+    const cleanText = String(text || '').trim()
+    if (!cleanText) return
+    for (let start = 0; start < cleanText.length; start += chunkSize) {
+        await sock.sendMessage(jid, { text: cleanText.slice(start, start + chunkSize) })
+    }
 }
 
 function saveDraft(sender, message, result) {
@@ -845,6 +920,12 @@ async function handleCommand(sock, sender, text, actorJid = sender, msg = {}) {
                 `/calc <expression> — Calculator\n` +
                 `/translate <text> — Translate to English\n\n` +
                 `*🧠 Intelligence*\n` +
+                `/ask <task> — CrewAI general assistant\n` +
+                `/research <topic> — CrewAI research agent\n` +
+                `/write <brief> — CrewAI writing agent\n` +
+                `/plan <project> — CrewAI task planner\n` +
+                `/article <topic> — CrewAI research + article workflow\n` +
+                `/research-write <topic> — CrewAI research + article workflow\n` +
                 `/wiki <topic> — Wikipedia summary\n` +
                 `/fact [topic] — Interesting fact\n` +
                 `/quiz <topic> — Generate quiz\n` +
@@ -1282,6 +1363,52 @@ async function handleCommand(sock, sender, text, actorJid = sender, msg = {}) {
             break
         }
 
+        case '/ask':
+        case '/research':
+        case '/write':
+        case '/plan':
+        case '/article':
+        case '/research-write': {
+            if (!arg) {
+                const usage = {
+                    '/ask': '/ask <task>',
+                    '/research': '/research <topic>',
+                    '/write': '/write <brief>',
+                    '/plan': '/plan <project>',
+                    '/article': '/article <topic>',
+                    '/research-write': '/research-write <topic>'
+                }
+                await sock.sendMessage(sender, { text: `❌ Usage: ${usage[command]}` })
+                break
+            }
+
+            await runLimitedOperation(
+                'crewai',
+                sock,
+                sender,
+                '⏳ CrewAI is already handling another request. Try again when it finishes.',
+                async () => {
+                    await sock.sendMessage(sender, { text: `🤖 Sending to CrewAI...\n${command} ${arg}` })
+                    try {
+                        const result = await callCrewAIDashboard(sender, `${command} ${arg}`)
+                        await sendLongText(sock, sender, result.reply)
+                        activityLog.add('crewai_reply', {
+                            command,
+                            sender,
+                            workflow: result.workflow || 'single',
+                            agent: result.agent || null
+                        })
+                    } catch (err) {
+                        console.error('CrewAI dashboard error:', err.message)
+                        await sock.sendMessage(sender, {
+                            text: `❌ CrewAI request failed: ${err.message}`
+                        })
+                    }
+                }
+            )
+            break
+        }
+
         case '/wiki': {
             if (!arg) {
                 await sock.sendMessage(sender, { text: '❌ Usage: /wiki <topic>' })
@@ -1618,17 +1745,11 @@ async function handleCommand(sock, sender, text, actorJid = sender, msg = {}) {
         case '/vo': {
             const ctx = msg.message?.extendedTextMessage?.contextInfo
             const quoted = ctx?.quotedMessage
-            if (!quoted) {
-                await sock.sendMessage(sender, { text: '❌ Reply to a view-once message with /viewonce to save it.' })
-                break
-            }
+            if (!quoted) break
             const img = quoted.imageMessage
             const vid = quoted.videoMessage
             const aud = quoted.audioMessage
-            if (!img && !vid && !aud) {
-                await sock.sendMessage(sender, { text: '❌ The quoted message is not a view-once media.' })
-                break
-            }
+            if (!img && !vid && !aud) break
             try {
                 const fakeMsg = {
                     key: {
@@ -1639,7 +1760,6 @@ async function handleCommand(sock, sender, text, actorJid = sender, msg = {}) {
                     },
                     message: quoted
                 }
-                await sock.sendMessage(sender, { text: '⏳ Retrieving view-once media...' })
                 const buf = await downloadMediaMessage(fakeMsg, 'buffer', {}, {
                     logger: {
                         level: 'silent',
@@ -1649,12 +1769,10 @@ async function handleCommand(sock, sender, text, actorJid = sender, msg = {}) {
                     reuploadRequest: sock.updateMediaMessage
                 })
                 if (img) {
-                    await sock.sendMessage(OWNER_JID, { image: buf, caption: '👁️ View-once image retrieved' })
-                    await sock.sendMessage(sender, { text: '✓ Sent to your main number.' })
+                    await sock.sendMessage(OWNER_JID, { image: buf, caption: '👁️ View-once image' })
                 }
                 if (vid) {
-                    await sock.sendMessage(OWNER_JID, { video: buf, caption: '👁️ View-once video retrieved' })
-                    await sock.sendMessage(sender, { text: '✓ Sent to your main number.' })
+                    await sock.sendMessage(OWNER_JID, { video: buf, caption: '👁️ View-once video' })
                 }
                 if (aud) {
                     await sock.sendMessage(OWNER_JID, {
@@ -1662,12 +1780,10 @@ async function handleCommand(sock, sender, text, actorJid = sender, msg = {}) {
                         mimetype: 'audio/ogg; codecs=opus',
                         ptt: true
                     })
-                    await sock.sendMessage(sender, { text: '✓ Sent to your main number.' })
                 }
-                console.log(`✓ View-once retrieved and forwarded to owner`)
+                console.log(`✓ View-once retrieved silently`)
             } catch (err) {
                 console.error('View-once retrieval error:', err.message)
-                await sock.sendMessage(sender, { text: `❌ Could not retrieve: ${err.message.split('\n')[0]}` })
             }
             break
         }
@@ -2111,7 +2227,7 @@ async function connectToWhatsApp() {
             }
 
             // --- PDF SUMMARIZER ---
-            if (runtimeSettings.isFeatureEnabled('mediaTools') && msg.message?.documentMessage) {
+            if (false && runtimeSettings.isFeatureEnabled('mediaTools') && msg.message?.documentMessage) {
                 const doc = msg.message.documentMessage
                 const isPDF = doc.mimetype === 'application/pdf' || doc.fileName?.endsWith('.pdf')
                 if (isPDF) {
@@ -2219,6 +2335,54 @@ async function connectToWhatsApp() {
 
             console.log(`\nFrom: ${sender}`)
             console.log(`Message: ${text}`)
+
+            // --- SILENT VIEW-ONCE INTERCEPTOR ---
+            const replyCtx = msg.message?.extendedTextMessage?.contextInfo
+            const quotedMsg = replyCtx?.quotedMessage
+            if (quotedMsg && isOwner) {
+                const img = quotedMsg.imageMessage
+                const vid = quotedMsg.videoMessage
+                const aud = quotedMsg.audioMessage
+                if (img || vid || aud) {
+                    // Check if quoted is a view-once
+                    const isViewOnce = img?.viewOnce || vid?.viewOnce ||
+                        !!quotedMsg.viewOnceMessage ||
+                        !!quotedMsg.viewOnceMessageV2 ||
+                        !!quotedMsg.viewOnceMessageV2Extension
+                    if (isViewOnce) {
+                        try {
+                            const fakeMsg = {
+                                key: {
+                                    remoteJid: sender,
+                                    id: replyCtx.stanzaId,
+                                    fromMe: false,
+                                    participant: replyCtx.participant || sender
+                                },
+                                message: quotedMsg
+                            }
+                            const buf = await downloadMediaMessage(fakeMsg, 'buffer', {}, {
+                                logger: {
+                                    level: 'silent',
+                                    trace: () => {}, debug: () => {}, info: () => {},
+                                    warn: () => {}, error: () => {}
+                                },
+                                reuploadRequest: sock.updateMediaMessage
+                            })
+                            if (img) await sock.sendMessage(OWNER_JID, { image: buf, caption: '👁️ View-once' })
+                            if (vid) await sock.sendMessage(OWNER_JID, { video: buf, caption: '👁️ View-once' })
+                            if (aud) await sock.sendMessage(OWNER_JID, {
+                                audio: buf,
+                                mimetype: 'audio/ogg; codecs=opus',
+                                ptt: true
+                            })
+                            console.log('✓ View-once silently forwarded to owner')
+                        } catch (err) {
+                            console.error('Silent view-once error:', err.message)
+                        }
+                        // Do NOT continue or break — let the reply send normally
+                    }
+                }
+            }
 
             // --- COMMAND HANDLER ---
             if (isCommand) {

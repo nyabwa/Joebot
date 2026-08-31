@@ -372,7 +372,7 @@ def wa_draft():
 
         if is_question:
             lang_response = create_completion_with_retry(
-                model='llama-3.3-70b-versatile',
+                model='llama-3.1-8b-instant',
                 messages=[{
                     'role': 'user',
                     'content': f'What language is this message written in? Reply with only one word: English, Kiswahili, or Sheng.\n\nMessage: "{message}"'
@@ -381,7 +381,7 @@ def wa_draft():
             detected_lang = lang_response.choices[0].message.content.strip()
 
             qa_response = create_completion_with_retry(
-                model='llama-3.3-70b-versatile',
+                model='llama-3.1-8b-instant',
                 messages=[
                     {
                         'role': 'system',
@@ -440,7 +440,7 @@ COMPLEXITY: [simple, moderate, or complex]
 FLAG: [yes or no]"""
 
         response = create_completion_with_retry(
-            model="llama-3.3-70b-versatile",
+            model="llama-3.1-8b-instant",
             messages=[
                 {"role": "user", "content": prompt}
             ]
@@ -623,7 +623,7 @@ def num_info():
     try:
         client = Groq(api_key=os.getenv('GROQ_API_KEY'))
         response = client.chat.completions.create(
-            model='llama-3.3-70b-versatile',
+            model='llama-3.1-8b-instant',
             messages=[{
                 'role': 'user',
                 'content': f'''Analyze this phone number: +{number}
@@ -693,7 +693,7 @@ def calculate():
     expression = data.get('expression', '')
     client = Groq(api_key=os.getenv("GROQ_API_KEY"))
     response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model="llama-3.1-8b-instant",
         messages=[{
             "role": "user",
             "content": f"Calculate this and return ONLY the numerical answer, nothing else: {expression}"
@@ -709,7 +709,7 @@ def translate():
     text = data.get('text', '')
     client = Groq(api_key=os.getenv("GROQ_API_KEY"))
     response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model="llama-3.1-8b-instant",
         messages=[{
             "role": "user",
             "content": f"Translate this to English. Return ONLY the translation, nothing else: {text}"
@@ -725,7 +725,7 @@ def get_wiki():
     topic = data.get('topic', '')
     client = Groq(api_key=os.getenv('GROQ_API_KEY'))
     response = client.chat.completions.create(
-        model='llama-3.3-70b-versatile',
+        model='llama-3.1-8b-instant',
         messages=[{
             'role': 'user',
             'content': f'Give me a concise Wikipedia-style summary of "{topic}" in 3-4 sentences. Include key facts only.'
@@ -741,7 +741,7 @@ def get_fact():
     client = Groq(api_key=os.getenv('GROQ_API_KEY'))
     prompt = f'Give me one surprising, verified, interesting fact about "{topic}". One sentence only.' if topic else 'Give me one surprising, verified, interesting fact about anything. One sentence only.'
     response = client.chat.completions.create(
-        model='llama-3.3-70b-versatile',
+        model='llama-3.1-8b-instant',
         messages=[{'role': 'user', 'content': prompt}]
     )
     return jsonify({'result': response.choices[0].message.content.strip()})
@@ -753,7 +753,7 @@ def get_quiz():
     topic = data.get('topic', '')
     client = Groq(api_key=os.getenv('GROQ_API_KEY'))
     response = client.chat.completions.create(
-        model='llama-3.3-70b-versatile',
+        model='llama-3.1-8b-instant',
         messages=[{
             'role': 'user',
             'content': f'Generate a 5-question multiple choice quiz about "{topic}". Format each question as:\nQ1: [question]\nA) [option]\nB) [option]\nC) [option]\nD) [option]\nAnswer: [correct letter]\n\nKeep it educational and accurate.'
@@ -769,7 +769,7 @@ def get_diagnose():
     symptoms = data.get('symptoms', '')
     client = Groq(api_key=os.getenv('GROQ_API_KEY'))
     response = client.chat.completions.create(
-        model='llama-3.3-70b-versatile',
+        model='llama-3.1-8b-instant',
         messages=[
             {
                 'role': 'system',
@@ -856,7 +856,7 @@ def get_motivate():
     from groq import Groq
     client = Groq(api_key=os.getenv('GROQ_API_KEY'))
     response = client.chat.completions.create(
-        model='llama-3.3-70b-versatile',
+        model='llama-3.1-8b-instant',
         messages=[{
             'role': 'user',
             'content': 'Give me one powerful motivational quote. Include the author. One quote only.'
@@ -970,7 +970,7 @@ def answer_question():
 
     client = Groq(api_key=os.getenv('GROQ_API_KEY'))
     response = client.chat.completions.create(
-        model='llama-3.3-70b-versatile',
+        model='llama-3.1-8b-instant',
         messages=[
             {
                 'role': 'system',
@@ -1079,7 +1079,7 @@ def summarize_pdf():
 
         client = Groq(api_key=os.getenv('GROQ_API_KEY'))
         response = client.chat.completions.create(
-            model='llama-3.3-70b-versatile',
+            model='llama-3.1-8b-instant',
             messages=[{
                 'role': 'user',
                 'content': f'Summarize this document in clear bullet points. Be concise:\n\n{text[:8000]}'
@@ -1137,7 +1137,7 @@ def summarize_youtube():
 
         client = Groq(api_key=os.getenv('GROQ_API_KEY'))
         response = client.chat.completions.create(
-            model='llama-3.3-70b-versatile',
+            model='llama-3.1-8b-instant',
             messages=[{
                 'role': 'user',
                 'content': f'Summarize this YouTube video transcript in clear bullet points. Be concise:\n\n{transcript[:6000]}'
